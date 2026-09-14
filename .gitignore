@@ -5,3 +5,4 @@ work/
 out/
 tmp/
 pgdata/
+.claude/settings.local.json
