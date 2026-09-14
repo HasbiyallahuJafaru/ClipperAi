@@ -1,0 +1,286 @@
+"""Projects: one source video processed into clips. The service functions here are shared by the REST API and the
+MCP server; `python jobs.py` runs the Postgres-backed worker that does the processing.
+
+usage: python jobs.py [--concurrency N]   (default: WORKER_CONCURRENCY or 1)
+"""
+import argparse
+import ipaddress
+import os
+import re
+import shutil
+import socket
+import sys
+import threading
+import time
+import traceback
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
+from uuid import UUID, uuid4
+
+import openai
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, Field, model_validator
+
+import clipper
+import db
+import storage
+
+TMP = clipper.HERE / "tmp"  # per-project scratch space, deleted after every run
+RUNNING = ["downloading", "transcribing", "analyzing", "rendering", "packaging"]
+MESSAGES = {
+    "queued": "Waiting to start...",
+    "downloading": "Getting your video...",
+    "transcribing": "Listening to your video...",
+    "analyzing": "Finding your strongest moments...",
+    "rendering": "Creating your clips...",
+    "packaging": "Preparing your clips...",
+    "completed": "Ready.",
+    "failed": "Something went wrong.",
+    "cancelled": "Cancelled.",
+}
+# explicit content types: OS mime tables disagree (Windows maps .ass to audio/aac)
+CONTENT_TYPES = {".mp4": "video/mp4", ".ass": "text/plain; charset=utf-8", ".jpg": "image/jpeg",
+                 ".json": "application/json"}
+UPLOAD = re.compile(r"upload:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+# retrying these can't succeed: bad input, bad credentials, a request the provider rejects
+PERMANENT = (clipper.PermanentError, openai.AuthenticationError, openai.PermissionDeniedError, openai.BadRequestError)
+
+
+def public_url(url: str) -> str:
+    """The worker downloads whatever a source points at, so only public http(s) hosts are allowed: no local files,
+    localhost, private networks or cloud metadata addresses."""
+    # ponytail: DNS is checked once; rebinding could swap the address before download - pin the IP if abused
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("source must be an http(s) URL or an upload:<id> from POST /api/uploads")
+    try:
+        addresses = {info[4][0].split("%")[0] for info in socket.getaddrinfo(parsed.hostname, None)}
+    except socket.gaierror:
+        raise ValueError(f"cannot resolve host {parsed.hostname}") from None
+    if not all(ipaddress.ip_address(a).is_global for a in addresses):
+        raise ValueError("source must be on the public internet")
+    return url
+
+
+class NewUpload(BaseModel):
+    content_type: str = Field(pattern=r"^video/[\w.+-]+$", description="e.g. video/mp4")
+    size: int = Field(gt=0, le=storage.MAX_UPLOAD_BYTES, description="File size in bytes")
+
+
+class NewProject(BaseModel):
+    source: str = Field(description="Public http(s) video URL (e.g. YouTube), or upload:<id> from POST /api/uploads")
+    clips: int | None = Field(None, ge=1, le=30, description="Clips to make; default ~1 per 6 minutes of video")
+    min_seconds: float = Field(30, ge=5, le=180)
+    max_seconds: float = Field(60, ge=5, le=180)
+
+    @model_validator(mode="after")
+    def check(self):
+        if self.min_seconds > self.max_seconds:
+            raise ValueError("min_seconds must not exceed max_seconds")
+        if upload := UPLOAD.fullmatch(self.source):
+            size = storage.size(f"uploads/{upload[1]}")
+            if size is None:
+                raise ValueError("upload not found: PUT the file to its upload_url first")
+            if size > storage.MAX_UPLOAD_BYTES:  # a signed PUT can't cap size, so check what actually arrived
+                raise ValueError("upload is larger than 5 GB")
+        else:
+            public_url(self.source)
+        return self
+
+
+class Cancelled(Exception):
+    pass
+
+
+def present(project: dict, clips: list[dict] | None = None) -> dict:
+    """API shape: adds a human message and, for finished projects, signed file links until the files expire."""
+    project = project | {"message": MESSAGES[project["status"]]}
+    if project["status"] == "completed":
+        project["files_expire_at"] = project["finished_at"] + timedelta(days=storage.CLIP_DAYS)
+    if clips is not None:
+        live = "files_expire_at" in project and project["files_expire_at"] > datetime.now(timezone.utc)
+        base = f"projects/{project['id']}/clip"
+        project["clips"] = [clip | ({f"{kind}_url": storage.download_url(f"{base}{clip['idx']:02}.{ext}")
+                                     for kind, ext in (("video", "mp4"), ("captions", "ass"), ("thumbnail", "jpg"))}
+                                    if live else {}) for clip in clips]
+    return project
+
+
+def create_upload(request: NewUpload) -> dict:
+    """Step 1 of uploading: the client PUTs the file straight to storage, then creates a project with `source`."""
+    upload_id = uuid4()
+    return {"source": f"upload:{upload_id}", "method": "PUT", "expires_in": 3600,
+            "upload_url": storage.upload_url(f"uploads/{upload_id}", request.content_type),
+            "headers": {"Content-Type": request.content_type}}
+
+
+def discard_upload(source: str):
+    if upload := UPLOAD.fullmatch(source):
+        storage.delete_prefix(f"uploads/{upload[1]}")
+
+
+def create_project(request: NewProject) -> dict:
+    options = {"n": request.clips, "min_len": request.min_seconds, "max_len": request.max_seconds}
+    with db.connect() as c:
+        return present(c.execute("insert into projects (source, options) values (%s, %s) returning *",
+                                 (request.source, Jsonb(options))).fetchone())
+
+
+def get_project(project_id: UUID) -> dict | None:
+    with db.connect() as c:
+        project = c.execute("select * from projects where id = %s", (project_id,)).fetchone()
+        clips = c.execute("select * from clips where project_id = %s order by idx", (project_id,)).fetchall()
+    return project and present(project, clips)
+
+
+def list_projects(limit: int = 50) -> list[dict]:
+    with db.connect() as c:
+        return [present(p) for p in c.execute("select * from projects order by created_at desc limit %s", (limit,))]
+
+
+def cancel_project(project_id: UUID) -> dict | None:
+    """Queued projects cancel at once; running ones stop at their next step. None if missing or already finished."""
+    with db.connect() as c:
+        project = c.execute("""
+            update projects set cancel_requested = true, updated_at = now(),
+                status = case when status = 'queued' then 'cancelled' else status end,
+                finished_at = case when status = 'queued' then now() end
+            where id = %s and status not in ('completed', 'failed', 'cancelled') returning *""",
+                            (project_id,)).fetchone()
+    if project and project["status"] == "cancelled":
+        discard_upload(project["source"])
+    return project and present(project)
+
+
+def load_transcript(key: str) -> dict | None:
+    with db.connect() as c:
+        row = c.execute("select data from transcripts where source_key = %s", (key,)).fetchone()
+    return row and row["data"]
+
+
+def save_transcript(key: str, transcript: dict):
+    with db.connect() as c:
+        c.execute("insert into transcripts (source_key, language, data) values (%s, %s, %s) on conflict do nothing",
+                  (key, transcript["language"], Jsonb(transcript)))
+
+
+def claim() -> dict | None:
+    """Requeue projects whose worker died (no heartbeat for 2 min), then take the oldest due queued project."""
+    with db.connect() as c:
+        c.execute("""
+            update projects set updated_at = now(), error = 'worker stopped responding',
+                status = case when cancel_requested then 'cancelled'
+                              when attempts >= max_attempts then 'failed' else 'queued' end,
+                finished_at = case when cancel_requested or attempts >= max_attempts then now() end
+            where status = any(%s) and heartbeat_at < now() - interval '2 minutes'""", (RUNNING,))
+        return c.execute("""
+            update projects set status = 'downloading', detail = '', attempts = attempts + 1,
+                heartbeat_at = now(), updated_at = now()
+            where id = (select id from projects where status = 'queued' and run_after <= now()
+                        order by created_at for update skip locked limit 1)
+            returning *""").fetchone()
+
+
+def run_job(project: dict):
+    """Process a claimed project to completed, cancelled, queued-for-retry (with backoff) or failed. Local files are
+    always removed afterwards; uploaded sources are removed once the project reaches a final state."""
+    # ponytail: if a worker stalls past the heartbeat window its job can run twice; add a claim token if seen
+    pid, finished, temp = project["id"], threading.Event(), TMP / str(project["id"])
+
+    def heartbeat():  # proves the process is alive; a crashed worker stops beating and claim() requeues its job
+        while not finished.wait(30):
+            try:
+                with db.connect() as c:
+                    c.execute("update projects set heartbeat_at = now() where id = %s", (pid,))
+            except Exception:
+                traceback.print_exc()
+
+    def progress(stage: str, detail: str = ""):
+        with db.connect() as c:
+            project_now = c.execute("update projects set status = %s, detail = %s, updated_at = now() where id = %s"
+                                    " returning cancel_requested", (stage, detail, pid)).fetchone()
+        if project_now["cancel_requested"]:
+            raise Cancelled
+
+    threading.Thread(target=heartbeat, daemon=True).start()
+    options, source, final = project["options"], project["source"], True
+    try:
+        if upload := UPLOAD.fullmatch(source):
+            source = str(temp / "upload")
+            storage.get(f"uploads/{upload[1]}", temp / "upload")
+        key, out, clips = clipper.run(source, temp / "out", options["n"], options["min_len"], options["max_len"],
+                                      progress, load_transcript, save_transcript, work_root=temp / "work")
+        progress("packaging", f"{len(clips)} clips")
+        storage.delete_prefix(f"projects/{pid}/")  # leftovers from an earlier attempt
+        for path in sorted(out.iterdir()):
+            storage.put(path, f"projects/{pid}/{path.name}", CONTENT_TYPES[path.suffix])
+        with db.connect() as c, c.transaction():
+            c.execute("delete from clips where project_id = %s", (pid,))
+            for i, clip in enumerate(clips, 1):
+                c.execute("""insert into clips (project_id, idx, start_s, end_s, score, reason, hook, title,
+                                                description, hashtags, posts)
+                             values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                          (pid, i, clip.start, clip.end, clip.score, clip.reason, clip.hook, clip.title,
+                           clip.description, Jsonb(clip.hashtags), Jsonb(clip.posts.model_dump())))
+            c.execute("update projects set status = 'completed', detail = '', error = null, source_key = %s,"
+                      " finished_at = now(), updated_at = now() where id = %s", (key, pid))
+    except Cancelled:
+        with db.connect() as c:
+            c.execute("update projects set status = 'cancelled', detail = '', finished_at = now(), updated_at = now()"
+                      " where id = %s", (pid,))
+    except Exception as e:
+        final = isinstance(e, PERMANENT) or project["attempts"] >= project["max_attempts"]
+        with db.connect() as c:
+            c.execute("""update projects set status = %s, detail = '', error = %s, updated_at = now(),
+                             run_after = now() + make_interval(mins => %s),
+                             finished_at = case when %s then now() end
+                         where id = %s""",
+                      ("failed" if final else "queued", f"{type(e).__name__}: {e}"[:2000], 2 ** project["attempts"],
+                       final, pid))
+        if final:
+            storage.delete_prefix(f"projects/{pid}/")
+        traceback.print_exc()
+    finally:
+        finished.set()
+        shutil.rmtree(temp, ignore_errors=True)
+        if final:
+            discard_upload(project["source"])
+
+
+def work(concurrency: int):
+    # ponytail: fixed thread count; size it to CPU/RAM (each job runs one ffmpeg) and per-plan limits later
+    db.migrate()
+
+    def loop():
+        while True:
+            try:
+                project = claim()
+            except Exception:  # database unreachable: keep trying rather than dying
+                traceback.print_exc()
+                time.sleep(10)
+                continue
+            if project:
+                print(f"project {project['id']} attempt {project['attempts']}: {project['source']}", flush=True)
+                try:
+                    run_job(project)
+                except Exception:  # e.g. storage down during cleanup: log it, the heartbeat stops, claim() recovers
+                    traceback.print_exc()
+                print(f"project {project['id']} done", flush=True)
+            else:
+                time.sleep(2)
+
+    for _ in range(concurrency):
+        threading.Thread(target=loop, daemon=True).start()
+    print(f"worker running, {concurrency} job(s) at a time", flush=True)
+    while True:
+        time.sleep(3600)  # main thread stays interruptible (Ctrl+C); jobs cut off mid-way are requeued by claim()
+
+
+if __name__ == "__main__":
+    clipper.load_env()
+    required = ("GROQ_API_KEY", "DEEPSEEK_API_KEY", "S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET")
+    if missing := [k for k in required if not os.environ.get(k)]:
+        sys.exit(f"missing {', '.join(missing)} in {clipper.HERE / '.env'}")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--concurrency", type=int, default=int(os.environ.get("WORKER_CONCURRENCY", 1)))
+    work(parser.parse_args().concurrency)

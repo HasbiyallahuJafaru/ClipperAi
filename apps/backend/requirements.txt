@@ -1,0 +1,9 @@
+yt-dlp
+openai
+pydantic
+opencv-python-headless
+fastapi
+uvicorn
+psycopg[binary]
+boto3
+# local dev/tests only: pgserver (Postgres without installing it), moto[server] (fake S3 for test_jobs.py)
