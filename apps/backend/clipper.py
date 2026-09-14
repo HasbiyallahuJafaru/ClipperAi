@@ -371,11 +371,17 @@ def save_disk_transcript(key: str, transcript: dict):
 def run(source: str, out: Path | None = None, n: int | None = None, min_len: float = 30, max_len: float = 60,
         progress=lambda stage, detail="": print(stage, detail),
         load_transcript=disk_transcript, save_transcript=save_disk_transcript,
-        work_root: Path = WORK) -> tuple[str, Path, list[Clip]]:
+        work_root: Path = WORK, max_seconds: float | None = None, max_clips: int | None = None
+        ) -> tuple[str, Path, list[Clip]]:
     """The whole pipeline. `progress(stage, detail)` is called at every step (it may raise to cancel); transcripts
-    are cached by source key through load/save; downloads go under `work_root`. Returns (source key, out dir, clips)."""
+    are cached by source key through load/save; downloads go under `work_root`. `max_seconds` / `max_clips` cap the
+    source length and clip count (plan allowances), checked before anything is paid for.
+    Returns (source key, out dir, clips)."""
     progress("downloading")
     video, work = acquire(source, work_root)
+    if max_seconds is not None and (seconds := duration_of(video)) > max_seconds:
+        raise PermanentError(f"this video is {seconds / 60:.0f} minutes long, but only {max_seconds / 60:.0f} minutes"
+                             " of video are left in your plan this month")
     key = work.name
     progress("transcribing")
     transcript = load_transcript(key)
@@ -385,9 +391,9 @@ def run(source: str, out: Path | None = None, n: int | None = None, min_len: flo
     if not transcript["segments"]:
         raise PermanentError("no speech found in the video")
 
-    progress("analyzing", f"{len(transcript['segments'])} segments")
+    progress("analyzing")
     n = n or max(3, min(30, round(transcript["segments"][-1]["end"] / 360)))
-    clips = find_clips(transcript, n, min_len, max_len)
+    clips = find_clips(transcript, n if max_clips is None else min(n, max_clips), min_len, max_len)
 
     out = out or HERE / "out" / key
     out.mkdir(parents=True, exist_ok=True)

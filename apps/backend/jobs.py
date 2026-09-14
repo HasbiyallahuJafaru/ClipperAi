@@ -4,7 +4,10 @@ MCP server; `python jobs.py` runs the Postgres-backed worker that does the proce
 usage: python jobs.py [--concurrency N]   (default: WORKER_CONCURRENCY or 1)
 """
 import argparse
+import csv
+import io
 import ipaddress
+import json
 import os
 import re
 import shutil
@@ -13,7 +16,10 @@ import sys
 import threading
 import time
 import traceback
+import zipfile
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -21,6 +27,7 @@ import openai
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, model_validator
 
+import billing
 import clipper
 import db
 import storage
@@ -29,6 +36,7 @@ TMP = clipper.HERE / "tmp"  # per-project scratch space, deleted after every run
 RUNNING = ["downloading", "transcribing", "analyzing", "rendering", "packaging"]
 MESSAGES = {
     "queued": "Waiting to start...",
+    "retrying": "Hit a problem. Trying again shortly...",
     "downloading": "Getting your video...",
     "transcribing": "Listening to your video...",
     "analyzing": "Finding your strongest moments...",
@@ -88,13 +96,23 @@ class NewProject(BaseModel):
         return self
 
 
+class ClipEdit(BaseModel):
+    """Review a clip. Omitted (or null) fields stay as they are. The hook is burned into the video, so it isn't here."""
+    review: Literal["pending", "approved", "rejected"] | None = None
+    title: str | None = Field(None, min_length=1, max_length=300)
+    description: str | None = Field(None, max_length=5000)
+    hashtags: list[str] | None = Field(None, max_length=30)
+    posts: clipper.Posts | None = None
+
+
 class Cancelled(Exception):
     pass
 
 
 def present(project: dict, clips: list[dict] | None = None) -> dict:
     """API shape: adds a human message and, for finished projects, signed file links until the files expire."""
-    project = project | {"message": MESSAGES[project["status"]]}
+    retrying = project["status"] == "queued" and project["error"]  # a failed attempt waiting for its backoff
+    project = project | {"message": MESSAGES["retrying" if retrying else project["status"]]}
     if project["status"] == "completed":
         project["files_expire_at"] = project["finished_at"] + timedelta(days=storage.CLIP_DAYS)
     if clips is not None:
@@ -120,6 +138,8 @@ def discard_upload(source: str):
 
 
 def create_project(request: NewProject) -> dict:
+    """Queues a project. Raises billing.LimitError if the plan doesn't allow another one this month."""
+    billing.check_new_project()
     options = {"n": request.clips, "min_len": request.min_seconds, "max_len": request.max_seconds}
     with db.connect() as c:
         return present(c.execute("insert into projects (source, options) values (%s, %s) returning *",
@@ -135,7 +155,9 @@ def get_project(project_id: UUID) -> dict | None:
 
 def list_projects(limit: int = 50) -> list[dict]:
     with db.connect() as c:
-        return [present(p) for p in c.execute("select * from projects order by created_at desc limit %s", (limit,))]
+        return [present(p) for p in c.execute("""
+            select p.*, (select count(*) from clips where project_id = p.id) as clip_count
+            from projects p order by created_at desc limit %s""", (limit,))]
 
 
 def cancel_project(project_id: UUID) -> dict | None:
@@ -150,6 +172,84 @@ def cancel_project(project_id: UUID) -> dict | None:
     if project and project["status"] == "cancelled":
         discard_upload(project["source"])
     return project and present(project)
+
+
+def delete_project(project_id: UUID) -> dict | None:
+    """Deletes a project with its clips and files. None if missing or still being processed (cancel it first)."""
+    with db.connect() as c:
+        project = c.execute("delete from projects where id = %s and status <> all(%s) returning *",
+                            (project_id, RUNNING)).fetchone()
+    if project:  # row first: if storage fails now, the bucket lifecycle rules still remove the files
+        storage.delete_prefix(f"projects/{project_id}/")
+        discard_upload(project["source"])
+    return project
+
+
+def update_clip(project_id: UUID, idx: int, edit: ClipEdit) -> dict | None:
+    """Approve/reject a clip and/or replace its copy. Returns the clip row (no file links), None if missing."""
+    with db.connect() as c:
+        return c.execute("""
+            update clips set review = coalesce(%s, review), title = coalesce(%s, title),
+                description = coalesce(%s, description), hashtags = coalesce(%s, hashtags), posts = coalesce(%s, posts)
+            where project_id = %s and idx = %s returning *""",
+                         (edit.review, edit.title, edit.description,
+                          None if edit.hashtags is None else Jsonb(edit.hashtags),
+                          None if edit.posts is None else Jsonb(edit.posts.model_dump()), project_id, idx)).fetchone()
+
+
+class _Pipe(io.RawIOBase):
+    """Write end for zipfile: collects what it writes so a generator can pass it on in pieces."""
+
+    def __init__(self):
+        self.data = bytearray()
+
+    def writable(self):
+        return True
+
+    def write(self, b):
+        self.data += b
+        return len(b)
+
+    def take(self) -> bytes:
+        taken, self.data = bytes(self.data), bytearray()
+        return taken
+
+
+def content_package(project_id: UUID) -> Iterator[bytes] | None:
+    """A ZIP of every clip that wasn't rejected: videos/, captions/, thumbnails/ and metadata/clips.csv + clips.json
+    with the current (edited) copy, streamed straight from storage. None if there's nothing to package: the project
+    is missing, unfinished or expired, or every clip was rejected."""
+    # ponytail: the bytes flow through the API server; build the ZIP in the worker and hand out a link if bandwidth
+    # or open connections become a problem
+    project = get_project(project_id)
+    clips = [clip for clip in (project or {}).get("clips", []) if clip["review"] != "rejected"]
+    if not clips or "video_url" not in clips[0]:
+        return None
+
+    def stream():
+        pipe = _Pipe()
+        with zipfile.ZipFile(pipe, "w") as package:  # stored, not deflated: MP4 and JPEG are already compressed
+            for clip in clips:
+                for folder, ext in (("videos", "mp4"), ("captions", "ass"), ("thumbnails", "jpg")):
+                    name = f"clip{clip['idx']:02}.{ext}"
+                    with package.open(f"{folder}/{name}", "w") as entry:
+                        for chunk in storage.chunks(f"projects/{project_id}/{name}"):
+                            entry.write(chunk)
+                            if data := pipe.take():
+                                yield data
+            copy = ["idx", "title", "hook", "description", "hashtags"]
+            facts = ["start_s", "end_s", "score", "review", "reason"]
+            table = io.StringIO()
+            writer = csv.DictWriter(table, [*copy, *clipper.Posts.model_fields, *facts])  # one column per platform
+            writer.writeheader()
+            for clip in clips:
+                writer.writerow({k: clip[k] for k in copy + facts} | clip["posts"] | {"hashtags": " ".join(clip["hashtags"])})
+            package.writestr("metadata/clips.csv", table.getvalue().encode("utf-8-sig"))  # BOM so Excel reads UTF-8
+            package.writestr("metadata/clips.json", json.dumps(
+                [{k: clip[k] for k in [*copy, "posts", *facts]} for clip in clips], indent=2, ensure_ascii=False))
+        yield pipe.take()
+
+    return stream()
 
 
 def load_transcript(key: str) -> dict | None:
@@ -205,11 +305,13 @@ def run_job(project: dict):
     threading.Thread(target=heartbeat, daemon=True).start()
     options, source, final = project["options"], project["source"], True
     try:
+        left = billing.allowance()  # checked again here: the plan may have changed or run out since it was queued
         if upload := UPLOAD.fullmatch(source):
             source = str(temp / "upload")
             storage.get(f"uploads/{upload[1]}", temp / "upload")
         key, out, clips = clipper.run(source, temp / "out", options["n"], options["min_len"], options["max_len"],
-                                      progress, load_transcript, save_transcript, work_root=temp / "work")
+                                      progress, load_transcript, save_transcript, work_root=temp / "work",
+                                      max_seconds=left["seconds"], max_clips=left["clips"])
         progress("packaging", f"{len(clips)} clips")
         storage.delete_prefix(f"projects/{pid}/")  # leftovers from an earlier attempt
         for path in sorted(out.iterdir()):
@@ -230,13 +332,15 @@ def run_job(project: dict):
                       " where id = %s", (pid,))
     except Exception as e:
         final = isinstance(e, PERMANENT) or project["attempts"] >= project["max_attempts"]
+        # PermanentError messages are written for people (no speech, plan limits): show them as the detail
+        reason = str(e) if isinstance(e, clipper.PermanentError) else ""
         with db.connect() as c:
-            c.execute("""update projects set status = %s, detail = '', error = %s, updated_at = now(),
+            c.execute("""update projects set status = %s, detail = %s, error = %s, updated_at = now(),
                              run_after = now() + make_interval(mins => %s),
                              finished_at = case when %s then now() end
                          where id = %s""",
-                      ("failed" if final else "queued", f"{type(e).__name__}: {e}"[:2000], 2 ** project["attempts"],
-                       final, pid))
+                      ("failed" if final else "queued", reason, f"{type(e).__name__}: {e}"[:2000],
+                       2 ** project["attempts"], final, pid))
         if final:
             storage.delete_prefix(f"projects/{pid}/")
         traceback.print_exc()

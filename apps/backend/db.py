@@ -2,16 +2,23 @@
 apps/backend/pgdata via pgserver (pip install pgserver)."""
 import functools
 import os
+import threading
 from pathlib import Path
 
 import psycopg
 from psycopg.rows import dict_row
 
 HERE = Path(__file__).parent
+_starting = threading.Lock()
+
+
+def url() -> str:
+    with _starting:  # API and worker threads asking at once would otherwise both try to start the dev server
+        return _url()
 
 
 @functools.cache
-def url() -> str:
+def _url() -> str:
     if os.environ.get("DATABASE_URL"):
         return os.environ["DATABASE_URL"]
     import pgserver  # dev only, keeps running in the background between runs

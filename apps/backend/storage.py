@@ -39,6 +39,11 @@ def get(key: str, path: Path):
     client().download_file(bucket(), key, str(path))
 
 
+def chunks(key: str):
+    """The object's bytes in 1 MB pieces, without saving it anywhere."""
+    return client().get_object(Bucket=bucket(), Key=key)["Body"].iter_chunks(1024 * 1024)
+
+
 def size(key: str) -> int | None:
     try:
         return client().head_object(Bucket=bucket(), Key=key)["ContentLength"]
@@ -55,8 +60,9 @@ def delete_prefix(prefix: str):
 
 
 def download_url(key: str) -> str:
-    return client().generate_presigned_url("get_object", Params={"Bucket": bucket(), "Key": key},
-                                           ExpiresIn=URL_SECONDS)
+    """Signed GET that saves as a file when opened as a link; <video>/<img> ignore the header and still display it."""
+    return client().generate_presigned_url("get_object", ExpiresIn=URL_SECONDS, Params={
+        "Bucket": bucket(), "Key": key, "ResponseContentDisposition": f'attachment; filename="{Path(key).name}"'})
 
 
 def upload_url(key: str, content_type: str) -> str:

@@ -17,7 +17,7 @@ One account, one subscription, one usage balance — reachable through three cha
   back). Telegram users link to their website account; no payments inside the bot.
 
 Channels are thin clients. **Auth, subscription checks and usage limits are enforced once, in the backend services**
-(`jobs.py` and future billing services), never re-implemented per channel.
+(`jobs.py`, `billing.py`), never re-implemented per channel.
 
 Build progress, what's left and lessons learned: @memory.md — **read it before starting work and update it after
 every milestone** (what was done, how it was verified, what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
@@ -40,8 +40,9 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
   caption. Never use generative video/image models for what FFmpeg can do.
 - **Never trust model output**: schema-validate (pydantic), retry, reject. Timestamps come from the transcript/pass 1,
   never invented. **Spoken caption text comes only from the transcript.**
-- **Business logic lives in `jobs.py` services** (shared by REST API, MCP server, Telegram bot, worker). Route and
-  bot/tool handlers stay thin and call the same services — no duplicate logic per channel.
+- **Business logic lives in backend service modules** (`jobs.py` projects, `billing.py` plans/limits; shared by REST
+  API, MCP server, Telegram bot, worker). Route and bot/tool handlers stay thin and call the same services — no
+  duplicate logic per channel. The website only talks to the backend through its `/api/*` proxy.
 - **Long work never blocks a request**: create a project → return id → worker processes → client polls status.
 - **Cost rules**: existing/cached transcript before paid STT (transcripts cached by source key in Postgres); cheapest
   acceptable model (deepseek-flash) before stronger (deepseek-v4-pro); cache results; temporary storage only; delete
@@ -66,15 +67,30 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
 
 ## Git
 - Commit or push only when the user asks. End commit messages with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
+- **Work directly on `main`; don't create branches** (user instruction, 2026-09-14).
 - Git identity is set per repo (HasbiyallahuJafaru); don't touch global config.
 
 ## Commands (run from `apps/backend`, Windows, Python venv at `.venv`)
 ```bash
 export PATH="$PATH:/c/Users/USER/AppData/Local/Microsoft/WinGet/Links"   # ffmpeg/ffprobe (winget) in Bash tool shells
 .venv/Scripts/python test_clipper.py        # engine checks (needs ffmpeg)
-.venv/Scripts/python test_jobs.py           # queue + storage vs throwaway Postgres (pgserver) + S3 (moto)
+.venv/Scripts/python test_jobs.py           # queue + storage + billing vs throwaway Postgres (pgserver) + S3 (moto)
 .venv/Scripts/python clipper.py <url> -n 3  # CLI run -> out/<source key>/
+.venv/Scripts/python dev.py                 # API :8000 + worker + fake in-memory S3 (moto :9000), no Cloudflare needed
 .venv/Scripts/python jobs.py                # worker
 .venv/Scripts/python -m uvicorn api:app --port 8000
 .venv/Scripts/python storage.py setup       # once per bucket: lifecycle + CORS
 ```
+
+Website (run from `apps/website`; backend must be running, `.env.local` has `BACKEND_URL` + `BACKEND_API_KEY`):
+```bash
+NODE_EXTRA_CA_CERTS=C:/Users/USER/.certs/ca-bundle-with-windows-roots.pem npm install   # Avast breaks npm TLS here
+npm run dev                  # http://127.0.0.1:3000 (npm run build && npm run start for the production build)
+node check.mjs               # proxy checks against the running site (no paid calls)
+# browser walkthrough of every flow (headless Edge via DevTools protocol; changes the local dev DB):
+cd ../backend && .venv/Scripts/python dev_fixture.py   # prints <project id> <media folder>
+cd ../website && node walkthrough.mjs <project id> <media folder>
+```
+Payments are switched off on purpose (user, 2026-09-14): plans show prices but subscribing charges nothing. Don't add a
+payment provider or card form unless the user asks.
+Next.js 16 changed APIs: read `node_modules/next/dist/docs/` before using an unfamiliar Next feature.

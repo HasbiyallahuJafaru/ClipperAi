@@ -81,6 +81,24 @@ with tempfile.TemporaryDirectory() as tmp:
         clipper.OpenAI, clipper.CHUNK, clipper.OVERLAP = real_openai, 600, 10
     assert [round(d) for d in calls] == [12, 12, 5], calls
 
+    # plan allowances: a too-long source stops before transcription; the clip count is capped before selection
+    def never(_):
+        raise AssertionError("must stop before transcription")
+    try:
+        clipper.run(str(src), Path(tmp) / "out", load_transcript=never, work_root=Path(tmp), max_seconds=10)
+        raise AssertionError("accepted a source longer than the allowance")
+    except clipper.PermanentError as e:
+        assert "minutes of video are left" in str(e)
+    asked = []
+    clipper.find_clips, real_find = lambda transcript, n, *_: asked.append(n) or [], clipper.find_clips
+    try:
+        hour = {"language": "en", "words": [], "segments": [{"start": 0, "end": 3600, "text": "x"}]}
+        clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, work_root=Path(tmp), max_clips=4)
+        clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, work_root=Path(tmp))
+    finally:
+        clipper.find_clips = real_find
+    assert asked == [4, 10], asked
+
 ass = captions([{"word": "Most", "start": 10.0, "end": 10.3}, {"word": "companies", "start": 10.3, "end": 10.9},
                 {"word": "fail.", "start": 11.0, "end": 11.4}, {"word": "{Why?}", "start": 12.5, "end": 12.9},
                 {"word": "outside", "start": 30.0, "end": 30.5}], start=9.9, end=20, hook="The mistake")

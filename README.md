@@ -11,8 +11,10 @@ The guiding principle: **AI makes the decisions, proven software does the work.*
 and write the copy; FFmpeg, OpenCV and libass do the cutting, cropping and captioning. That keeps output accurate
 (caption text always comes from the real transcript) and costs low.
 
-> **Status:** the backend engine, job system and storage layer are built and tested. The website, publishing,
-> MCP server, Telegram bot and billing are next. See [Status and roadmap](#status-and-roadmap).
+> **Status:** the backend engine, job system and storage layer are built and tested. The website works locally:
+> submit one or many videos, follow progress, review clips, download everything as a ZIP, and choose a plan (pricing,
+> checkout, billing, usage limits; payments are switched off, so plans are free for now). Accounts, publishing, the
+> MCP server and the Telegram bot are next. See [Status and roadmap](#status-and-roadmap).
 
 ---
 
@@ -25,6 +27,7 @@ and write the copy; FFmpeg, OpenCV and libass do the cutting, cropping and capti
 - [Getting started](#getting-started)
 - [Configuration](#configuration)
 - [Running the backend](#running-the-backend)
+- [Running the website](#running-the-website)
 - [API reference](#api-reference)
 - [What you get back](#what-you-get-back)
 - [Storage, retention and cleanup](#storage-retention-and-cleanup)
@@ -80,13 +83,13 @@ One account, one subscription and one usage balance, reachable three ways:
 
 | Channel | What it's for | Status |
 |---|---|---|
-| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Planned (Phase 5) |
+| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Works locally: submit (batch), review, ZIP download, pricing/checkout/billing with payments switched off |
 | **MCP server** | Use ClipperAi from AI assistants, e.g. *"take my latest podcast and make 15 clips"*. | Planned (Phase 8) |
 | **Telegram bot** | Send a video link to a bot and get clips and post copy back. Linked to your website account. | Planned |
 
 Every channel is a thin client over the same backend. Sign-in, subscription checks and usage limits are enforced once,
-in the backend, so the rules are identical everywhere. Today the backend is used through its REST API and a
-command-line tool.
+in the backend, so the rules are identical everywhere. Today ClipperAi is used through the website (locally), its
+REST API and a command-line tool.
 
 ---
 
@@ -100,11 +103,11 @@ flowchart TB
         T[Telegram bot]
         CLI[CLI]
     end
-    W -. planned .-> API
+    W -->|server-side proxy| API
     M -. planned .-> API
     T -. planned .-> API
-    API[REST API<br/>api.py] --> S[Project services<br/>jobs.py]
-    S --> PG[(Postgres<br/>projects · transcripts · clips)]
+    API[REST API<br/>api.py] --> S[Services<br/>jobs.py · billing.py]
+    S --> PG[(Postgres<br/>projects · clips · transcripts · subscriptions)]
     WK[Worker<br/>jobs.py] --> PG
     WK --> ENG[Engine<br/>clipper.py]
     CLI --> ENG
@@ -119,8 +122,10 @@ flowchart TB
   queue.
 - **Requests never wait for video work.** Creating a project returns immediately with an id; a separate worker process
   does the processing; clients check the status.
-- **Business logic lives in the services** (`jobs.py`). The API, the worker and the future MCP server and Telegram bot
-  all call the same functions.
+- **Business logic lives in the services**: `jobs.py` (projects, review, content package) and `billing.py` (plans and
+  usage limits). The API, the worker and the future MCP server and Telegram bot all call the same functions, so limits
+  are identical everywhere. The website never talks to the backend directly from the browser: its own server forwards
+  `/api/*` requests and adds the key.
 - **Providers are swappable by configuration.** Groq and DeepSeek are both reached through the OpenAI-compatible SDK;
   R2 is reached through the standard S3 API, so any S3-compatible store works.
 
@@ -136,25 +141,34 @@ ClipperAi/
 ├── DECISIONS.md            every component, its license, cost and why it was chosen
 ├── .claude/                instructions and build log for AI-assisted development
 └── apps/
-    ├── backend/            Python backend (everything that exists today)
+    ├── backend/            Python backend: engine, API, worker, billing
     │   ├── clipper.py      the engine + command-line tool
     │   ├── jobs.py         project services + background worker
+    │   ├── billing.py      plans, the subscription, monthly usage limits
     │   ├── api.py          REST API (FastAPI)
     │   ├── storage.py      Cloudflare R2 / S3: uploads, signed links, bucket setup
+    │   ├── dev.py          run API + worker + fake S3 locally in one command
     │   ├── db.py           Postgres connection + migration runner
     │   ├── migrations/     plain SQL migrations, applied in order
     │   ├── fonts/          Montserrat ExtraBold for captions (SIL OFL)
     │   ├── models/         YuNet face detection model (MIT)
     │   ├── test_clipper.py engine tests
-    │   ├── test_jobs.py    job queue + storage tests
+    │   ├── test_jobs.py    job queue, storage and billing tests
+    │   ├── dev_fixture.py  test data for the website walkthrough (local dev database only)
     │   ├── requirements.txt
     │   └── .env.example    configuration template
     ├── website/            Next.js website (Phase 5)
+    │   ├── app/            pages: / (new project), /dashboard, /projects/[id], /pricing, /checkout, /settings/billing
+    │   ├── app/api/        server-side proxy that adds the backend key (the browser never sees it)
+    │   ├── check.mjs       proxy checks against a running site
+    │   ├── walkthrough.mjs clicks through every flow in headless Edge
+    │   └── .env.example    BACKEND_URL + BACKEND_API_KEY template
     └── mcp/                MCP server (Phase 8; may live in the backend instead)
 ```
 
 Created locally while running, and never committed: `.env`, `.venv/`, `work/` (CLI download and transcript cache),
-`out/` (CLI output), `tmp/` (worker scratch space), `pgdata/` (local development database).
+`out/` (CLI output), `tmp/` (worker scratch space), `pgdata/` (local development database), and in the website
+`.env.local`, `node_modules/`, `.next/`.
 
 ---
 
@@ -166,7 +180,7 @@ Created locally while running, and never committed: `.env`, `.venv/`, `work/` (C
 |---|---|---|
 | **Python 3.12+** | Runs the backend | [python.org](https://www.python.org/downloads/) |
 | **FFmpeg** (with libass) | Audio extraction, cutting, cropping, captions | Windows: `winget install Gyan.FFmpeg` · macOS: `brew install ffmpeg` · Debian/Ubuntu: `apt install ffmpeg` |
-| **Node.js or Deno** | yt-dlp needs a JavaScript runtime to read YouTube | [nodejs.org](https://nodejs.org/) or [deno.com](https://deno.com/) |
+| **Node.js 20.9+** (or Deno for the backend only) | yt-dlp needs a JavaScript runtime to read YouTube; the website needs Node | [nodejs.org](https://nodejs.org/) or [deno.com](https://deno.com/) |
 | **Groq API key** | Transcription | [console.groq.com](https://console.groq.com/) |
 | **DeepSeek API key** | Clip selection and copywriting | [platform.deepseek.com](https://platform.deepseek.com/) |
 | **Cloudflare R2 bucket** | Storing clips and uploads (API and worker only) | Cloudflare dashboard → R2 |
@@ -189,6 +203,8 @@ pip install pgserver "moto[server]"   # optional: local dev database + fake S3 f
 
 cp .env.example .env                  # then open .env and fill it in
 ```
+
+The website has its own install step; see [Running the website](#running-the-website).
 
 ### Set up the R2 bucket
 
@@ -226,6 +242,14 @@ All settings live in `apps/backend/.env` (copy of [`.env.example`](apps/backend/
 
 The CLI only needs the Groq and DeepSeek keys; it doesn't use the database or R2.
 
+The website reads `apps/website/.env.local` (copy of [`.env.example`](apps/website/.env.example)), used only by its
+server, never sent to the browser:
+
+| Variable | Description |
+|---|---|
+| `BACKEND_URL` | Where the backend API runs, e.g. `http://127.0.0.1:8000`. |
+| `BACKEND_API_KEY` | The same value as `API_KEY` in `apps/backend/.env`. |
+
 ---
 
 ## Running the backend
@@ -249,7 +273,17 @@ python clipper.py podcast.mp4 -n 5 --min 20 --max 45
 Output goes to `out/<source id>/` (see [What you get back](#what-you-get-back)). Downloads and transcripts are cached
 in `work/`, so re-running the same video skips straight to clip selection.
 
-### API server and worker
+### Local development without Cloudflare
+
+```bash
+python dev.py
+```
+
+Starts everything in one process: the API on `http://127.0.0.1:8000`, one worker, the local database, and a fake
+in-memory S3 server (moto) on port 9000 in place of R2. Only the Groq, DeepSeek and `API_KEY` settings are needed.
+Stored clips disappear when you stop it. Needs `pip install pgserver "moto[server]"`.
+
+### API server and worker (with real R2)
 
 Run these in two terminals:
 
@@ -260,6 +294,38 @@ python -m uvicorn api:app --port 8000       # REST API on http://127.0.0.1:8000
 
 Both apply database migrations on start. You can run several workers (or raise `WORKER_CONCURRENCY`); they never
 pick up the same project twice. Interactive API docs are at `http://127.0.0.1:8000/docs`.
+
+---
+
+## Running the website
+
+The website (`apps/website`, Next.js + TypeScript + Tailwind) talks to the backend above, so start that first
+(`python dev.py` is enough locally).
+
+```bash
+cd apps/website
+npm install
+cp .env.example .env.local     # set BACKEND_API_KEY to the same value as API_KEY in apps/backend/.env
+npm run dev                    # http://127.0.0.1:3000  (or: npm run build && npm run start)
+```
+
+| Page | What it does |
+|---|---|
+| `/` | Paste video links (one per line for several) or upload files (several at once, drag and drop works), with optional clip count and length. Each video becomes its own project and starts right away. |
+| `/dashboard` | All projects, newest first, with live status. |
+| `/projects/new` | The same form as the home page. |
+| `/projects/{id}` | Live progress while processing (you can leave and come back), then every clip with a video preview, hook, title, description, per-platform posts with copy buttons, downloads, and **Approve / Reject / Edit**, plus **Approve all** and **Download all** (a ZIP of every clip that isn't rejected). Cancel or delete the project from here. |
+| `/pricing` | The three plans and their monthly limits. |
+| `/checkout?plan=pro` | Order summary ($0.00 due while payments are switched off) and **Start plan**. |
+| `/settings/billing` | Current plan, this month's usage against its limits, change or cancel the plan, billing history. |
+
+The browser only ever calls the website's own `/api/*` routes. The website's server forwards them to the backend and
+adds `BACKEND_API_KEY`, so the key never reaches the browser. Uploads go from the browser straight to storage through
+the signed link.
+
+> **Local only for now.** There is no sign-in yet, so anyone who can open the website can use the backend through it.
+> `npm run dev` and `npm run start` listen on `127.0.0.1` only. Don't deploy the website publicly until accounts
+> exist (Phase 9).
 
 ---
 
@@ -275,9 +341,17 @@ variable: `export API_KEY=...`.
 | `GET` | `/api/projects?limit=50` | List recent projects (newest first, max 200) | `200` |
 | `GET` | `/api/projects/{id}` | One project, including its clips and download links | `200` |
 | `POST` | `/api/projects/{id}/cancel` | Cancel a queued or running project | `200` |
+| `DELETE` | `/api/projects/{id}` | Delete a project that isn't processing, with its clips and files | `204` |
+| `PATCH` | `/api/projects/{id}/clips/{idx}` | Review a clip: approve / reject it, edit its copy | `200` |
+| `GET` | `/api/projects/{id}/package` | Download `content-package.zip` (see [Content package](#content-package)) | `200` |
+| `GET` | `/api/billing` | Plans, the current plan, this month's usage and billing history | `200` |
+| `POST` | `/api/billing/subscribe` | Start or switch plan: `{"plan": "creator" \| "pro" \| "business"}` | `201` |
+| `POST` | `/api/billing/cancel` | End the current plan | `200` |
 
-Errors: `401` bad or missing key · `404` unknown project · `409` cancelling a finished project · `422` invalid input
-(the response explains what's wrong).
+Errors: `401` bad or missing key · `402` no plan, or this month's allowance is used up (the message says which) ·
+`404` unknown project or clip · `409` cancelling a finished project, deleting one that's still processing (cancel it
+first), packaging one with nothing to download, or cancelling when there's no plan · `422` invalid input (the response
+explains what's wrong).
 
 ### Process a video from a link
 
@@ -317,19 +391,63 @@ curl -X POST http://127.0.0.1:8000/api/projects \
 ### Follow progress
 
 Poll `GET /api/projects/{id}` every few seconds. `status` is for code, `message` is ready to show to people, and
-`detail` adds context such as `clip 3 of 10`.
+`detail` adds context such as `clip 3 of 10`, or, for a project that failed for a reason people can act on, that reason
+(for example *no speech found in the video*, or a plan limit). The project list also returns `clip_count` for each
+project.
 
 | `status` | `message` | Meaning |
 |---|---|---|
-| `queued` | Waiting to start... | Waiting for a worker (or for a retry). |
+| `queued` | Waiting to start... | Waiting for a worker. |
+| `queued` | Hit a problem. Trying again shortly... | An attempt failed; retrying after a short wait (`error` says why). |
 | `downloading` | Getting your video... | Fetching the source. |
 | `transcribing` | Listening to your video... | Speech to text (skipped if cached). |
 | `analyzing` | Finding your strongest moments... | Choosing clips and writing copy. |
 | `rendering` | Creating your clips... | Cutting, framing and captioning. |
 | `packaging` | Preparing your clips... | Uploading results to storage. |
 | `completed` | Ready. | Clips and links are available. |
-| `failed` | Something went wrong. | See `error`. |
+| `failed` | Something went wrong. | `detail` has the reason when people can act on it; `error` has the technical one. |
 | `cancelled` | Cancelled. | Stopped on request. |
+
+### Review a clip
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/projects/<id>/clips/1 \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"review": "approved", "title": "A better title"}'
+```
+
+Send only what changes. `review` is `pending`, `approved` or `rejected`; `title` (1–300 characters), `description`
+(up to 5,000), `hashtags` (up to 30) and `posts` (all six platforms) replace the generated copy. The hook can't be
+edited because it's burned into the video. The response is the updated clip, without download links.
+
+### Content package
+
+`GET /api/projects/{id}/package` streams `content-package.zip` with every clip that isn't rejected:
+
+```
+videos/clip01.mp4 ...     captions/clip01.ass ...     thumbnails/clip01.jpg ...
+metadata/clips.csv        one row per clip: title, hook, description, hashtags, a column per platform, timing, score, review
+metadata/clips.json       the same, with posts as an object
+```
+
+The metadata includes your edits. The files are read straight from storage, so the package is always current and takes
+no extra space.
+
+### Plans and limits
+
+A project can only start with an active plan. **Payments are switched off**: choosing a plan activates it at once,
+nothing is charged, and every billing record shows `charged_cents: 0`. There is one workspace (no accounts yet).
+
+| Plan | Price shown | Videos a month | Hours of video a month | Clips a month |
+|---|---|---|---|---|
+| Creator | $15 | 5 | 5 | 50 |
+| Pro | $39 | 15 | 15 | 150 |
+| Business | $99 | no limit | 50 | 500 |
+
+Months are calendar months. Failed and cancelled projects don't use a video. Limits are checked when an upload link or
+project is requested (`402`), and again by the worker before anything is paid for: a video longer than the minutes left,
+or a plan that ran out while it was queued, fails with the reason in `detail`, and the clip count is capped to what's
+left. Plans live in `apps/backend/billing.py`.
 
 ---
 
@@ -347,6 +465,7 @@ A completed project (abbreviated):
   "clips": [
     {
       "idx": 1,
+      "review": "pending",
       "start_s": 24.12,
       "end_s": 55.82,
       "score": 95,
@@ -370,13 +489,14 @@ A completed project (abbreviated):
 
 | Field | Meaning |
 |---|---|
+| `review` | `pending` until someone approves or rejects the clip. |
 | `start_s`, `end_s` | Where the clip sits in the original video, in seconds. |
 | `score` | How strong the model judged the moment (0–100). Clips are ordered best first. |
 | `hook` | The line burned into the top of the video for the first 3 seconds. |
 | `title`, `description`, `hashtags` | General copy for the clip. |
 | `posts` | A separate post written for each platform's style and length. |
 | `reason` | Why the moment was chosen. |
-| `video_url` | 1080×1920 MP4 with captions burned in. |
+| `video_url` | 1080×1920 MP4 with captions burned in. Opening a link downloads the file; `<video>` tags still play it. |
 | `captions_url` | The captions as an editable `.ass` subtitle file. |
 | `thumbnail_url` | A JPEG cover image. |
 
@@ -419,8 +539,13 @@ so it keeps working even if the backend is down. R2 removes expired objects with
 
 ## Security
 
-- **Secrets stay in `.env`**, which is ignored by git. API keys are never sent to clients.
-- **Every API request is authenticated** with a bearer key (per-user accounts come with billing).
+- **Secrets stay in `.env`**, which is ignored by git. API keys are never sent to clients: the website's server adds
+  the backend key when it forwards requests, and refuses requests coming from other sites.
+- **Every API request is authenticated** with a bearer key (per-user accounts come later). The website has no sign-in
+  yet, so it only listens on `127.0.0.1`.
+- **Usage limits are enforced in the backend**, not in the website, so no client can skip them.
+- **No payment data.** Payments are switched off; there is no card form and nothing is charged. When payments go live
+  they'll use a provider's hosted checkout, so card details never touch ClipperAi's servers.
 - **Sources are validated** before any download: only public `http(s)` addresses or confirmed uploads. Local files,
   `localhost`, private networks and cloud metadata addresses are rejected.
 - **Uploads are restricted** to video content types and 5 GB, and the file must actually exist in storage before a
@@ -452,12 +577,28 @@ biggest cost is server time for rendering. Re-processing a video reuses its cach
 ```bash
 python test_clipper.py   # engine: cut snapping, model-output validation, clip selection, transcript stitching,
                          # audio chunk files, caption timing, face-tracking shots (needs ffmpeg)
-python test_jobs.py      # jobs + storage: queueing, retries and backoff, permanent failures, cancellation,
-                         # crash recovery, uploads, signed links, expiry, cleanup
+python test_jobs.py      # jobs + storage + billing: queueing, retries and backoff, permanent failures, cancellation,
+                         # crash recovery, uploads, signed links, expiry, cleanup, review, content package,
+                         # plans, usage and limits
 ```
 
 `test_jobs.py` starts a throwaway Postgres (`pgserver`) and a fake S3 server (`moto`), so it doesn't touch real data or
 your R2 bucket. It needs internet access for DNS checks. Both print `ok` when everything passes.
+
+With the backend and website running, `node check.mjs` (from `apps/website`) checks the website's proxy: the key is
+added, other sites are refused, backend errors and validation pass through, and every page loads. It makes no paid
+calls.
+
+`walkthrough.mjs` uses the site like a person in headless Microsoft Edge: refused without a plan, pricing → checkout →
+plan, switching plans, several links and several uploaded files at once, approve, edit, copy, reject, **Download all**,
+cancel plan. It changes the local dev database, so it needs its fixture first:
+
+```bash
+cd apps/backend && python dev_fixture.py            # prints <project id> <media folder>; refuses if DATABASE_URL is set
+cd apps/website && node walkthrough.mjs <project id> <media folder>
+```
+
+Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 
 ---
 
@@ -474,6 +615,10 @@ your R2 bucket. It needs internet access for DNS checks. Both print `ok` when ev
 | `422 upload not found` | Finish the `PUT` before creating the project. |
 | Download link returns an error | Links last 24 hours; request the project again. After 30 days the files are deleted. |
 | Rendering is slow | Rendering is CPU-bound. Lower `WORKER_CONCURRENCY` on small machines, or run more worker machines. |
+| Website: *"Can't reach the ClipperAi backend"* | Start the backend (`python dev.py`) and check `BACKEND_URL` in `apps/website/.env.local`. |
+| Website: `401 invalid API key` | `BACKEND_API_KEY` in `apps/website/.env.local` must equal `API_KEY` in `apps/backend/.env`. Restart the website after changing it. |
+| Locally, downloads over ~1–2 MB stall and reset (`RetriesExceededError`, `WinError 10054`), or yt-dlp says `CERTIFICATE_VERIFY_FAILED` | Antivirus web scanning (seen with Avast Web Shield) is intercepting the traffic, even on `127.0.0.1`. Add exceptions for `127.0.0.1`/`localhost` and HTTPS scanning, or pause it while testing. |
+| `402 Choose a plan to start making clips.` | Pick any plan on `/pricing` (free while payments are switched off). |
 
 ---
 
@@ -485,17 +630,20 @@ your R2 bucket. It needs internet access for DNS checks. Both print `ok` when ev
 | 1–2 | Clipping engine: transcription, two-pass selection, speaker framing, captions, thumbnails, per-platform copy | ✅ Done |
 | 3 | Job system: REST API, Postgres queue, worker, retries, cancellation, crash recovery | ✅ Done |
 | 4 | Storage: R2, direct uploads, signed links, automatic cleanup | ✅ Built and tested against a local S3; live R2 test pending |
-| 5 | Website: product UI, subscriptions and payments, usage | Next |
-| 6 | Publishing through Buffer | Planned |
+| 5 | Website: product UI, subscriptions and payments, usage | Built locally: batch submit, progress, review, ZIP download, pricing/checkout/billing (payments switched off) |
+| 6 | Publishing through Buffer | Next |
 | 7 | Content calendar and scheduling | Planned |
 | 8 | MCP server for AI assistants | Planned |
 | — | Telegram bot | Planned |
-| 9 | Accounts, plans, usage limits, cost tracking | Planned |
+| 9 | Accounts, plans, usage limits, cost tracking | Partly: plans and monthly limits for one workspace; accounts, real payments and cost tracking planned |
 | 10 | Production hardening and deployment (Railway) | Planned |
 
 Known limitations today:
 
-- There's one shared API key; per-user accounts arrive with billing.
+- There's one shared API key and no sign-in on the website; per-user accounts arrive with billing, so the website is
+  for local use until then. Plans and usage belong to that single workspace.
+- Payments are switched off: plans show prices but charge nothing. No payment provider is connected yet.
+- Editing a clip's copy doesn't re-render the video, so the burned-in hook can't be changed yet.
 - Framing follows the largest face, which isn't always the person speaking in two-person shots; handheld footage can
   produce visible crop jumps.
 - The thumbnail is taken 1 second into each clip, which can miss the speaker if the clip opens on other footage.
@@ -510,7 +658,8 @@ Known limitations today:
 - [.claude/](.claude/): working rules and the build log used for AI-assisted development.
 
 Bundled third-party assets: **Montserrat** font (SIL Open Font License 1.1, see
-[`apps/backend/fonts/OFL.txt`](apps/backend/fonts/OFL.txt)) and the **YuNet** face detection model (MIT,
+[`apps/backend/fonts/OFL.txt`](apps/backend/fonts/OFL.txt); the website uses the same file for its headings) and the
+**YuNet** face detection model (MIT,
 [OpenCV Zoo](https://github.com/opencv/opencv_zoo)).
 
 The ClipperAi code itself doesn't have a license file yet.
