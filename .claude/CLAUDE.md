@@ -1,7 +1,10 @@
-# ClipperAi — project instructions
+# YT-Clipper — project instructions
+
+**Product name: YT-Clipper** (renamed from ClipperAi, user 2026-09-15). The repo, folder, storage buckets and code
+names keep the old name; every user-facing text says YT-Clipper.
 
 ## What we are building
-An AI video repurposing SaaS: **one long video → many polished 9:16 clips → captions, hooks, titles, per-platform
+An AI video repurposing SaaS: **one long video → many polished 9:16 clips → captions, titles, hooks (as text), per-platform
 copy → content calendar → automated publishing (Buffer)**, on the website and in a Flutter mobile app.
 "I give it a video and it gives me a month of content." Full spec: `masterprompt.md` (source of truth for scope and
 phase order). Dependency/license/cost decisions: `DECISIONS.md` (update it whenever a dependency changes).
@@ -12,14 +15,19 @@ app** (user, 2026-09-15: the Telegram bot, the command-line tool and the **MCP s
 them or other channels):
 - **Website** (`apps/website`, Next.js): the **only place to pay** (subscriptions) and a full way to use the product
   (submit videos, review clips, schedule, see usage and billing).
-- **Mobile app** (`apps/mobile`, Flutter, iOS + Android; Phase 8): submit a link or a video from the phone, follow
-  progress, review/edit/approve clips, save or share clips, publish and schedule, see plan and usage (read-only). It
+- **Mobile app** (`apps/mobile`, Flutter, app name "YT-Clipper", id `xyz.ytclipper.app`; **Android first**, iOS code
+  kept but no build route yet; Phase 8, feature-complete with the website 2026-09-15): submit a link, a phone video or
+  something shared from another app (YouTube's Share button), follow progress, review/edit/approve clips, save or share
+  clips, publish now or schedule, content calendar, plan and usage (read-only). Never run on a device yet. It
   calls the FastAPI REST API directly over HTTPS with the Clerk session token as a Bearer token (the website's `/api`
   proxy is for the browser only). **No purchases in the app** (store in-app purchase rules): plans are managed on the
   website. No secrets or provider keys in the app.
 
-**Domain: `ytclipper.xyz`** (user, 2026-09-15). **The backend runs on Railway** (API service + worker service + Railway
-Postgres; media stays on R2). Subdomains are not decided yet (a natural split: website on `ytclipper.xyz`, API on
+**Domain: `ytclipper.xyz`** (user, 2026-09-15). **Deployed 2026-09-15:** backend on **Railway** project `ytclipper`
+(services `api` + `worker` from one Dockerfile in `apps/backend`, Railway Postgres; media stays on R2), API at
+`https://api-production-e0fc.up.railway.app` (`/health`); website on **Vercel** project `website` (root `apps/website`,
+deploys on every push to `main`, https://website-pearl-seven-93.vercel.app; its Deployment Protection still puts the
+`.vercel.app` URL behind Vercel login until the user changes it or connects the domain). Subdomains are not decided yet (a natural split: website on `ytclipper.xyz`, API on
 `api.ytclipper.xyz` for the app, public clip copies on a media subdomain instead of r2.dev); ask before wiring DNS. The backend REST
 API serves the website and the mobile app; it is not a separate product channel. Channels are thin clients. **Auth,
 subscription checks and usage limits are enforced once, in the backend services** (`jobs.py`, `billing.py`,
@@ -28,13 +36,14 @@ subscription checks and usage limits are enforced once, in the backend services*
 ### Accounts: Clerk (user decision, 2026-09-15)
 **Use Clerk for everything it offers around accounts** instead of building our own: sign-in/sign-up UI, the user
 database (we store only Clerk user ids as owners, no users/passwords table), sessions and token verification in the
-backend, Clerk Organizations for teams/workspaces, and sign-in in the mobile app (Clerk's Flutter SDK; check its
-status when Phase 8 starts). Clerk app id:
+backend, Clerk Organizations for teams/workspaces, and sign-in in the mobile app (`clerk_flutter` **0.0.18-beta**,
+community-maintained, pinned exactly; user accepted the beta risk 2026-09-15). Clerk app id:
 `app_3JMJIEqTu79eUjLFgFDsRzpNa7h` (always pass `--app` to `clerk init`). Website: `@clerk/nextjs` (`ClerkProvider` inside
 `<body>`, `await auth()`, Next 16 `proxy.ts` matcher includes `'/__clerk/:path*'` after `'/(api|trpc)(.*)'`). Never expose
 `CLERK_SECRET_KEY` to client code; don't read or print env files. Payments stay off; if they're switched on, ask
 whether to use Clerk Billing before choosing a provider. **Built 2026-09-15:** sign-in/up + protected pages, backend
-token verification, per-owner data. Next: Clerk sign-in in the Flutter app.
+token verification, per-owner data; the app's native tokens carry no `azp`, so `api.signed_in` checks the site only
+when a token names one. Still a **development instance** (production instance comes with the domain).
 
 ### Finding things: graphify first, not the whole build log (user, 2026-09-15)
 To save tokens, **don't read `.claude/memory.md` (or big files) end to end.** Look things up in the graphify map of the
@@ -92,13 +101,23 @@ what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
   and `projects/` (30 days). Don't store users' source videos beyond processing. Only exception: a clip being
   published is copied to the public bucket (`S3_PUBLIC_BUCKET`, Buffer can't read signed links) and deleted once posted.
 - **Publishing through a provider (Buffer)**, users connect their own accounts via OAuth/their key; never ask for
-  social passwords. Don't build per-network integrations in the MVP. Single posts are sent in the request; content
+  social passwords. **Today one workspace Buffer key** serves the accounts in `BUFFER_OWNERS`. Per-user connection is an
+  open decision (2026-09-15): Buffer's docs say OAuth + PKCE clients can be registered (Settings → API) but 2026
+  write-ups say third-party OAuth isn't open; the user checks their Buffer settings. Fallbacks: per-user API key, or a
+  multi-customer posting API (Ayrshare / Upload-Post / Zernio) where users connect socials directly. Don't build per-network integrations in the MVP. Single posts are sent in the request; content
   calendar posts are queued (`publications.status = 'queued'`) and handed to Buffer by the worker.
 - **UI (redesigned 2026-09-15 after the user's "Relink" reference)**: Next.js + TypeScript + Tailwind; modern premium
   SaaS, **light only**: sky photo heroes, white rounded cards on pale grey, one royal blue accent (#2355f5), Geist,
   pill buttons, Phosphor icons. Yellow only inside clip captions. Each nav link is its own page (user, 2026-09-15), the
   home page is just the hero. Tokens/components: `app/globals.css`, system notes: `DESIGN.md`. Keep human-readable
-  progress messages ("Finding your strongest moments...") and every text `walkthrough.mjs` clicks.
+  progress messages ("Finding your strongest moments...") and every text `walkthrough.mjs` clicks. **The app follows
+  the website's UI** (user, 2026-09-15): same tokens in `apps/mobile/lib/main.dart`, Geist + Instrument Serif TTFs.
+- **Clips (user, 2026-09-15):** no text drawn over the start of a clip (the old black-box "hook" overlay is removed;
+  hooks stay as editable copy). Captions are burned in unless the project sets `captions: false` (for videos that
+  already have subtitles); the `.ass` caption file is made either way. Auto-detecting burned-in subtitles is not built.
+- **SEO pages must stay true:** `compare/data.ts`, `tools/data.ts` and the FAQ only state what the product does today;
+  competitor facts are dated with sources. Re-check them when the product or prices change. OpenSEO project
+  `YT-Clipper` holds competitors, positioning and the research log.
 
 ## Security rules
 - **The GitHub repo is public** (github.com/HasbiyallahuJafaru/ClipperAi). Never commit `.env`, keys, tokens,
@@ -116,7 +135,7 @@ what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
 ## Testing against real services (Buffer, R2, social accounts)
 - **Never post publicly to the user's accounts without their explicit go-ahead.** Default: schedule days ahead, verify
   in Buffer, unschedule, then check Buffer has 0 waiting posts and the public bucket is empty. Label test content
-  clearly ("ClipperAi ... test").
+  clearly ("YT-Clipper ... test").
 - Buffer limits on this account: **100 API requests per 15 minutes** and **10 scheduled posts** (the plan's cap; more
   are refused with "Scheduled posts limit reached"). Don't loop against the real API.
 - Claude Code's auto-mode permission check can block commands that create or change real posts (and then related
@@ -160,6 +179,26 @@ cd ../backend && .venv/Scripts/python dev_fixture.py   # prints <project id> <me
 cd ../website && node walkthrough.mjs <project id> <media folder> <sign-in ticket>
 clerk doctor                 # Clerk integration health (CLI 3.3, logged in, linked to app_3JMJIEqTu79eUjLFgFDsRzpNa7h)
 ```
+Mobile app (run from `apps/mobile`; Flutter 3.47 at `C:/dev/flutter`):
+```bash
+flutter analyze && flutter test            # 13 tests: API client, uploads, screens, publishing, calendar, options
+# release APK against the live API (the Clerk publishable key is public; read it from the CLI, never print it):
+export NODE_EXTRA_CA_CERTS=C:/Users/USER/.certs/ca-bundle-with-windows-roots.pem
+export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStoreType=Windows-ROOT"   # this PC: Gradle downloads behind Avast
+KEY=$(clerk apps list --json | python -c "import json,sys; print(json.load(sys.stdin)[0]['instances'][0]['publishable_key'])")
+flutter build apk --release --dart-define=API_URL=https://api-production-e0fc.up.railway.app --dart-define=CLERK_PUBLISHABLE_KEY="$KEY"
+```
+Release builds refuse to start without both dart-defines. Release signing reads `android/key.properties` (never
+committed); without it the APK is debug-signed (fine for testing, not for the Play Store). Android SDK licences must be
+accepted by the user (`flutter doctor --android-licenses`). To look at screens without a device, render them with a
+throwaway golden test that loads the real fonts, then delete it.
+
+Deploy (backend): `railway up --service api --detach` and `--service worker` from `apps/backend` (CLI logged in).
+Railway variables are set per service (names only: `railway variables --service api --json` → keys); never print
+values. Vercel CLI needs `NODE_EXTRA_CA_CERTS` on this PC; in Git Bash set `MSYS_NO_PATHCONV=1` for `vercel api /v9/...`
+(it rewrites `/paths`). Creating domains and changing Vercel protection were blocked by the permission check: give
+the user the command.
+
 Payments are switched off on purpose (user, 2026-09-14): plans show prices but subscribing charges nothing. Don't add a
 payment provider or card form unless the user asks.
 Next.js 16 changed APIs: read `node_modules/next/dist/docs/` before using an unfamiliar Next feature.

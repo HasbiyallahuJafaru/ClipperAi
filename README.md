@@ -1,28 +1,30 @@
-# ClipperAi
+# YT-Clipper
 
 **Turn one long video into weeks of short-form content.**
 
-Give ClipperAi a podcast, interview or talk (a link or an uploaded file). It listens to the whole thing, finds the
+Give YT-Clipper a podcast, interview or talk (a link or an uploaded file). It listens to the whole thing, finds the
 moments that work on their own, and turns each one into a vertical 9:16 clip: the speaker kept in frame, captions
-that highlight each word as it's spoken, an on-screen hook, a thumbnail, and ready-to-post copy written separately
+that highlight each word as it's spoken (or no new captions, for videos that already have subtitles), a hook line,
+a thumbnail, and ready-to-post copy written separately
 for TikTok, Instagram, YouTube Shorts, LinkedIn, Facebook and X.
 
 The guiding principle: **AI makes the decisions, proven software does the work.** Language models choose the moments
 and write the copy; FFmpeg, OpenCV and libass do the cutting, cropping and captioning. That keeps output accurate
 (caption text always comes from the real transcript) and costs low.
 
-> **Status:** the backend engine, job system and storage layer are built and tested. The website works locally:
-> submit one or many videos, follow progress, review clips, download everything as a ZIP, publish or schedule approved
-> clips through Buffer, spread them over a content calendar, and choose a plan (pricing, checkout, billing, usage
-> limits; payments are switched off, so plans are free for now). Accounts (Clerk) are built too. The Flutter mobile app is next. See
-> [Status and roadmap](#status-and-roadmap).
+> **Status:** the backend (engine, job system, storage, billing, publishing) is built, tested and **deployed on
+> Railway**; the website is **deployed on Vercel** from `main`: submit one or many videos, follow progress with the
+> video's picture and a progress bar, review clips, download everything as a ZIP, publish or schedule approved clips
+> through Buffer, spread them over a content calendar, and choose a plan (payments are switched off, so plans are free
+> for now). Accounts use Clerk. The **Flutter mobile app** covers the same flows and has been built and tested, but not
+> yet run on a phone. See [Status and roadmap](#status-and-roadmap).
 
 ---
 
 ## Contents
 
 - [How it works](#how-it-works)
-- [Ways to use ClipperAi](#ways-to-use-clipperai)
+- [Ways to use YT-Clipper](#ways-to-use-yt-clipper)
 - [Architecture](#architecture)
 - [Repository layout](#repository-layout)
 - [Getting started](#getting-started)
@@ -69,8 +71,8 @@ flowchart LR
    - cut on word boundaries (never mid-word),
    - reframed to 9:16 by detecting faces four times a second and holding a steady crop on the speaker
      (center crop if there's no face),
-   - captioned in short groups of up to three words with the spoken word highlighted, plus the hook at the top for the
-     first three seconds,
+   - captioned in short groups of up to three words with the spoken word highlighted (skipped when the project turns
+     captions off; the caption file is made either way). Nothing else is drawn over the video,
    - loudness-normalized for social platforms and encoded as 1080×1920 H.264,
    - given a thumbnail.
 6. **Store.** The clips, captions, thumbnails and a `clips.json` summary are uploaded to Cloudflare R2 and handed back
@@ -78,19 +80,18 @@ flowchart LR
 
 ---
 
-## Ways to use ClipperAi
+## Ways to use YT-Clipper
 
 One account, one subscription and one usage balance, reachable two ways:
 
 | Channel | What it's for | Status |
 |---|---|---|
-| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Works locally: submit (batch), review, ZIP download, publish/schedule through Buffer, content calendar, pricing/checkout/billing with payments switched off |
-| **Mobile app** (`apps/mobile`, Flutter, iOS + Android) | The product on a phone: share a link or pick a video, follow progress, review and approve clips, save or share them, publish and schedule, see usage. No purchases in the app; plans are managed on the website. | Planned (Phase 8) |
+| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Deployed on Vercel: submit (batch), progress, review, ZIP download, publish/schedule through Buffer, content calendar, pricing/checkout/billing with payments switched off, comparison and tool pages |
+| **Mobile app** (`apps/mobile`, Flutter, Android first) | The product on a phone: paste or share a link (YouTube's Share button), pick a video, follow progress, review, edit and approve clips, save or share them, publish now or schedule, content calendar, see usage. No purchases in the app; plans are managed on the website. | Built and tested (13 tests); not yet run on a device; iOS build route not set up |
 
 Both are thin clients over the same backend. Sign-in, subscription checks and usage limits are enforced once, in the
 backend, so the rules are identical in both. The backend's REST API is what the website runs on; it isn't offered as a
-separate way to use ClipperAi. (An MCP server for AI assistants was planned earlier and has been dropped in favour of
-the mobile app.)
+separate way to use YT-Clipper.
 
 ---
 
@@ -123,10 +124,11 @@ flowchart TB
 - **Business logic lives in the services**: `jobs.py` (projects, review, content package), `billing.py` (plans and
   usage limits) and `publishing.py` (sending approved clips to Buffer). The API and the worker call the same functions, so limits are
   identical for the website and the mobile app. The website never talks to the backend directly from the browser: its
-  own server forwards `/api/*` requests with the signed-in session. The mobile app will call the API directly with its
-  session token.
-- **Hosting:** the backend (API and worker) runs on Railway with Railway Postgres; media stays on Cloudflare R2. The
-  domain is `ytclipper.xyz`.
+  own server forwards `/api/*` requests with the signed-in session. The mobile app calls the API directly with its
+  Clerk session token.
+- **Hosting:** the backend runs on Railway as two services built from one `Dockerfile` (`api`, and `worker` with
+  `START_COMMAND=python jobs.py`) plus Railway Postgres; media stays on Cloudflare R2. The website runs on Vercel and
+  deploys on every push to `main`. The domain will be `ytclipper.xyz`.
 - **Providers are swappable by configuration.** Groq and DeepSeek are both reached through the OpenAI-compatible SDK;
   R2 is reached through the standard S3 API, so any S3-compatible store works.
 
@@ -158,16 +160,18 @@ ClipperAi/
     │   ├── test_clipper.py engine tests
     │   ├── test_jobs.py    job queue, storage, billing and publishing tests
     │   ├── dev_fixture.py  test data for the website walkthrough (local dev database only)
+    │   ├── Dockerfile      one image for the Railway api and worker services (railway.json: build + restarts)
     │   ├── requirements.txt
     │   └── .env.example    configuration template
     ├── website/            Next.js website (Phase 5)
     │   ├── app/            pages: / (new project), /dashboard, /projects/[id], /projects/[id]/calendar, /pricing,
-    │   │                   /checkout, /settings/billing, /settings/integrations
+    │   │                   /checkout, /settings/billing, /settings/integrations, /compare/*, /tools/*, sitemap, robots
     │   ├── app/api/        server-side proxy that adds the backend key (the browser never sees it)
     │   ├── check.mjs       proxy checks against a running site
     │   ├── walkthrough.mjs clicks through every flow in headless Edge
     │   └── .env.example    BACKEND_URL + Clerk keys template
-    └── mobile/             Flutter app for iOS and Android (Phase 8)
+    └── mobile/             Flutter app (Android first): lib/api.dart (API client), lib/screens.dart (projects,
+                            new project, clips, plan), lib/publish.dart (edit, publish, calendar), test/app_test.dart
 ```
 
 Created locally while running, and never committed: `.env`, `.venv/`, `tmp/` (worker scratch space), `pgdata/` (local
@@ -251,7 +255,7 @@ All settings live in `apps/backend/.env` (copy of [`.env.example`](apps/backend/
 | `S3_BUCKET` | API, worker | Bucket name. |
 | `S3_PUBLIC_BUCKET` | API | Publishing only: the public bucket that holds copies of clips being posted. |
 | `S3_PUBLIC_URL` | API | Publishing only: that bucket's public address, e.g. `https://pub-<id>.r2.dev` or `https://media.example.com`. |
-| `BUFFER_API_KEY` | API | Buffer API key for publishing (Buffer → Settings → API). Your social accounts are connected inside Buffer; ClipperAi posts to them through this key. Optional: without it everything else works and the Publishing page says Buffer isn't connected. |
+| `BUFFER_API_KEY` | API | Buffer API key for publishing (Buffer → Settings → API). Your social accounts are connected inside Buffer; YT-Clipper posts to them through this key. Optional: without it everything else works and the Publishing page says Buffer isn't connected. |
 
 The website reads `apps/website/.env.local` (copy of [`.env.example`](apps/website/.env.example)), used only by its
 server, never sent to the browser:
@@ -354,7 +358,7 @@ Every feature is finished the same way: tests that prove it, every relevant chec
 
 ## API reference
 
-This is the backend the website runs on (for development and the website itself; people use ClipperAi through the
+This is the backend the website runs on (for development and the website itself; people use YT-Clipper through the
 website or the mobile app). Every request needs `Authorization: Bearer <Clerk session token>` and acts for that account. Bodies
 and responses are JSON. The examples use a shell variable holding a session token: `export TOKEN=...` (a signed-in
 page gets one with `await window.Clerk.session.getToken()`; tokens last about a minute).
@@ -399,6 +403,7 @@ curl -X POST http://127.0.0.1:8000/api/projects \
 | `source` | yes | A public `http(s)` link, or `upload:<id>` from an upload. Local paths, `localhost` and private network addresses are rejected. |
 | `clips` | no | 1–30. Default: about one per 6 minutes of video. |
 | `min_seconds`, `max_seconds` | no | 5–180, min ≤ max. Defaults 30 and 60. |
+| `captions` | no | `true` (default) burns captions into the clips; `false` for videos that already have subtitles. The caption file is made either way. |
 
 ### Process an uploaded file
 
@@ -425,8 +430,9 @@ curl -X POST http://127.0.0.1:8000/api/projects \
 
 Poll `GET /api/projects/{id}` every few seconds. `status` is for code, `message` is ready to show to people, and
 `detail` adds context such as `clip 3 of 10`, or, for a project that failed for a reason people can act on, that reason
-(for example *no speech found in the video*, or a plan limit). The project list also returns `clip_count` for each
-project.
+(for example *no speech found in the video*, or a plan limit). `progress` is how far along the project is (0–100,
+`null` once failed or cancelled; the download reports its own percentage in `detail`), and `thumbnail` is the source
+video's picture for YouTube links (`null` otherwise). The project list also returns `clip_count` for each project.
 
 | `status` | `message` | Meaning |
 |---|---|---|
@@ -450,8 +456,8 @@ curl -X PATCH http://127.0.0.1:8000/api/projects/<id>/clips/1 \
 ```
 
 Send only what changes. `review` is `pending`, `approved` or `rejected`; `title` (1–300 characters), `description`
-(up to 5,000), `hashtags` (up to 30) and `posts` (all six platforms) replace the generated copy. The hook can't be
-edited because it's burned into the video. The response is the updated clip, without download links.
+(up to 5,000), `hashtags` (up to 30), `hook` (up to 300) and `posts` (all six platforms) replace the generated copy.
+The response is the updated clip, without download links.
 
 ### Content package
 
@@ -486,7 +492,7 @@ left. Plans live in `apps/backend/billing.py`.
 ### Publishing
 
 Clips are published through [Buffer](https://buffer.com). Connect your social accounts in Buffer, create an API key
-there (Settings → API) and set it as `BUFFER_API_KEY`. ClipperAi never asks for social passwords.
+there (Settings → API) and set it as `BUFFER_API_KEY`. YT-Clipper never asks for social passwords.
 
 ```bash
 curl http://127.0.0.1:8000/api/publishing/channels -H "Authorization: Bearer $TOKEN"
@@ -592,11 +598,11 @@ A completed project (abbreviated):
 | `review` | `pending` until someone approves or rejects the clip. |
 | `start_s`, `end_s` | Where the clip sits in the original video, in seconds. |
 | `score` | How strong the model judged the moment (0–100). Clips are ordered best first. |
-| `hook` | The line burned into the top of the video for the first 3 seconds. |
+| `hook` | A short opening line for the post or a voiceover (not drawn on the video). |
 | `title`, `description`, `hashtags` | General copy for the clip. |
 | `posts` | A separate post written for each platform's style and length. |
 | `reason` | Why the moment was chosen. |
-| `video_url` | 1080×1920 MP4 with captions burned in. Opening a link downloads the file; `<video>` tags still play it. |
+| `video_url` | 1080×1920 MP4, with captions burned in unless the project turned them off. Opening a link downloads the file; `<video>` tags still play it. |
 | `captions_url` | The captions as an editable `.ass` subtitle file. |
 | `thumbnail_url` | A JPEG cover image. |
 
@@ -607,7 +613,7 @@ the files are gone and no links are returned.
 
 ## Storage, retention and cleanup
 
-ClipperAi keeps media only as long as it's useful. Metadata (transcripts, clip details, copy) stays in Postgres.
+YT-Clipper keeps media only as long as it's useful. Metadata (transcripts, clip details, copy) stays in Postgres.
 
 | What | Where | Kept for |
 |---|---|---|
@@ -645,14 +651,14 @@ so it keeps working even if the backend is down. R2 removes expired objects with
   posts. The website only listens on `localhost` while publishing still uses one Buffer account.
 - **Usage limits are enforced in the backend**, not in the website, so no client can skip them.
 - **No payment data.** Payments are switched off; there is no card form and nothing is charged. When payments go live
-  they'll use a provider's hosted checkout, so card details never touch ClipperAi's servers.
+  they'll use a provider's hosted checkout, so card details never touch YT-Clipper's servers.
 - **Sources are validated** before any download: only public `http(s)` addresses or confirmed uploads. Local files,
   `localhost`, private networks and cloud metadata addresses are rejected.
 - **Uploads are restricted** to video content types and 5 GB, and the file must actually exist in storage before a
   project is accepted.
 - **Files are private.** They're only reachable through signed links that expire. The one exception is a clip you
   publish: it's copied to a separate public bucket under a random name for Buffer to fetch, and deleted once posted.
-- **No social passwords.** Social accounts are connected inside Buffer; ClipperAi only holds the Buffer API key, in
+- **No social passwords.** Social accounts are connected inside Buffer; YT-Clipper only holds the Buffer API key, in
   `.env` on the server.
 - **No shell injection.** External programs are run with argument lists, never by building shell command strings.
 - **Licensing is checked.** Copyleft (GPL/AGPL) code is avoided in the product; see [DECISIONS.md](DECISIONS.md).
@@ -694,6 +700,10 @@ With the backend and website running, `node check.mjs` (from `apps/website`) che
 added, other sites are refused, backend errors and validation pass through, and every page loads. It makes no paid
 calls.
 
+The mobile app has its own checks: `flutter analyze` and `flutter test` (from `apps/mobile`) cover the API client,
+uploads with progress, readable errors, the projects and project screens, clip editing, publishing, the calendar
+request (with the phone's time zone) and project options.
+
 `walkthrough.mjs` uses the site like a person in headless Microsoft Edge: refused without a plan, pricing → checkout →
 plan, switching plans, several links and several uploaded files at once, approve, edit, copy, reject, **Download all**,
 the Publishing page, **Publish** now and scheduled, unschedule, cancel plan. It needs the backend started with
@@ -721,7 +731,7 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | `422 upload not found` | Finish the `PUT` before creating the project. |
 | Download link returns an error | Links last 24 hours; request the project again. After 30 days the files are deleted. |
 | Rendering is slow | Rendering is CPU-bound. Lower `WORKER_CONCURRENCY` on small machines, or run more worker machines. |
-| Website: *"Can't reach the ClipperAi backend"* | Start the backend (`python dev.py`) and check `BACKEND_URL` in `apps/website/.env.local`. |
+| Website: *"Can't reach the YT-Clipper backend"* | Start the backend (`python dev.py`) and check `BACKEND_URL` in `apps/website/.env.local`. |
 | Website: *Sign in to continue.* while signed in | The backend couldn't verify the session: `CLERK_SECRET_KEY` in `apps/backend/.env` must belong to the same Clerk app as the website's keys, and the site's address must be in `CLERK_AUTHORIZED_PARTIES`. |
 | Signed in, but pages act signed out (server log: *unable to resolve handshake*) | The website's server can't reach Clerk over HTTPS. Behind an HTTPS-scanning antivirus, start it with `NODE_EXTRA_CA_CERTS=<CA bundle>`; the backend needs `SSL_CERT_FILE=<CA bundle>`. |
 | Locally, downloads over ~1–2 MB stall and reset (`RetriesExceededError`, `WinError 10054`), or yt-dlp says `CERTIFICATE_VERIFY_FAILED` | Antivirus web scanning (seen with Avast Web Shield) is intercepting the traffic, even on `127.0.0.1`. Add exceptions for `127.0.0.1`/`localhost` and HTTPS scanning, or pause it while testing. |
@@ -742,12 +752,12 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | 1–2 | Clipping engine: transcription, two-pass selection, speaker framing, captions, thumbnails, per-platform copy | ✅ Done |
 | 3 | Job system: REST API, Postgres queue, worker, retries, cancellation, crash recovery | ✅ Done |
 | 4 | Storage: R2, direct uploads, signed links, automatic cleanup | ✅ Done: tested against a local S3 and checked live on R2 |
-| 5 | Website: product UI, subscriptions and payments, usage | Built locally: batch submit, progress, review, ZIP download, pricing/checkout/billing (payments switched off) |
+| 5 | Website: product UI, subscriptions and payments, usage | ✅ Deployed on Vercel: batch submit, progress, review, ZIP download, pricing/checkout/billing (payments switched off), SEO pages |
 | 6 | Publishing through Buffer | ✅ Done: post now, scheduled and unscheduled posts tested through the website against real Buffer, YouTube and R2 |
 | 7 | Content calendar and scheduling | ✅ Done: plan, preview, Schedule all through the worker, calendar list, `calendar.csv`; against real Buffer: one post scheduled and unscheduled through the website, and a 30-post batch (Buffer's request limit not yet tried for real) |
-| 8 | Mobile app (Flutter, iOS + Android) on the same API | Next |
+| 8 | Mobile app (Flutter, iOS + Android) on the same API | Built and tested on Android code; not yet run on a device; iOS build route and share extension to do |
 | 9 | Accounts, plans, usage limits, cost tracking | Partly: plans and monthly limits for one workspace; accounts, real payments and cost tracking planned |
-| 10 | Production hardening and deployment (Railway) | Planned |
+| 10 | Production hardening and deployment (Railway) | Partly: backend on Railway and website on Vercel; domain, Clerk production instance and hardening tests to do |
 
 Known limitations today:
 
@@ -758,11 +768,15 @@ Known limitations today:
   and the public bucket uses Cloudflare's rate-limited `r2.dev` address until a custom domain is connected.
 - Buffer plans cap how many posts can be scheduled at once (10 on the account used for testing). Calendar posts past the
   cap come back as failed with Buffer's reason ("Scheduled posts limit reached"); the calendar doesn't warn beforehand.
-- Editing a clip's copy doesn't re-render the video, so the burned-in hook can't be changed yet.
+- Captions can be switched off per project, but existing burned-in subtitles aren't detected automatically.
 - Framing follows the largest face, which isn't always the person speaking in two-person shots; handheld footage can
   produce visible crop jumps.
 - The thumbnail is taken 1 second into each clip, which can miss the speaker if the clip opens on other footage.
-- Downloads from YouTube can be blocked on cloud servers; uploads are the reliable path.
+- **YouTube blocks downloads from Railway's servers** ("Sign in to confirm you're not a bot"): such projects fail
+  with a readable message. Set `YTDLP_PROXY` on the worker to route downloads through a (residential) proxy; uploads
+  always work.
+- The live `.vercel.app` address is behind Vercel's Deployment Protection until it's switched to previews only or the
+  domain is connected.
 
 ---
 
@@ -777,4 +791,4 @@ Bundled third-party assets: **Montserrat** font (SIL Open Font License 1.1, see
 **YuNet** face detection model (MIT,
 [OpenCV Zoo](https://github.com/opencv/opencv_zoo)).
 
-The ClipperAi code itself doesn't have a license file yet.
+The YT-Clipper code itself doesn't have a license file yet.

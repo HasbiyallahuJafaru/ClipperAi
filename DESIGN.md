@@ -1,4 +1,4 @@
-# Design system (website)
+# Design system (website and mobile app)
 
 Written from the built site, 2026-09-15. Source of truth for values: `apps/website/app/globals.css`.
 
@@ -20,7 +20,7 @@ one royal blue accent, near-black navy ink. Light only (user decision). No dark 
 | caption | `#ffe600` | spoken word in clip captions only |
 
 Type: Geist variable; headings medium (marketing) or semibold (app), tracking -0.03 to -0.04em. Marketing headings put their key words in `<em>`: Instrument Serif Italic, 1.1em, accent blue (user's pick). Montserrat ExtraBold
-only for captions and hooks. Shadows: `shadow-card` (resting), `shadow-float` (hero preview, featured, popovers).
+only for captions. Shadows: `shadow-card` (resting), `shadow-float` (hero preview, featured, popovers).
 
 ## Shape
 Buttons, chips, nav: full pill. Fields: 12px. Cards: 16px (`card`). Panels, plan cards, marketing cards: 24px. Device
@@ -28,7 +28,7 @@ frames: larger, in em. Elevation is a shadow or a 1px ring, never both on the sa
 
 ## Components (`globals.css` @layer components)
 `btn` (+ `btn-primary`, `btn-ghost`, `btn-sm`, `btn-approve`; `aria-pressed` = ink fill, approve = blue), `input`,
-`link`, `card`, `chip` (+ `chip-accent`, `chip-danger`), `skeleton`, `clip-frame` / `clip-caption` / `clip-hook`
+`link`, `card`, `chip` (+ `chip-accent`, `chip-danger`), `skeleton`, `clip-frame` / `clip-caption`
 (engine caption style scaled by container width). Shared React: `Logo`, `PageHeader`, `ClipFrame`, `PAGES` (`app/ui.tsx`);
 marketing sections in `app/(site)/sections.tsx`; `NetworkIcon` in `app/(app)/projects/[id]/publish.tsx`.
 
@@ -45,3 +45,13 @@ dots flow along publishing lines. All off under `prefers-reduced-motion`.
 ## Placeholders to replace
 Sample clip frames are gradients (`ClipFrame` tones) and sample project text is invented ("Weekly Build, episode 42").
 Swap in frames from a video we have rights to.
+
+## Mobile app (`apps/mobile`)
+Follows the website (user, 2026-09-15). Tokens are the same hex values as constants in `lib/main.dart` (`ground`,
+`surface`, `ink`, `muted`, `line`, `accent`...) wired into one `ThemeData`: Geist 400/500/600 as static TTFs, pill
+filled/outlined buttons, 16px white cards with a 1px `line` ring, 12px fields with an accent focus ring, pale-blue
+selected states (`secondaryContainer` = accent-soft, never Material's default teal), Clerk's sign-in themed through
+`ClerkThemeExtension`. `Heading` puts key words in Instrument Serif Italic blue like the website's `<em>`; `Logo` redraws
+the mark; the sign-in screen is Clerk's card on the sky photo. Progress: `progressBar` + `ClipLoading` (the source
+video's picture in a 9:16 frame, grey until colour fills from the bottom). Status chips match the website's `chip`
+variants. The launcher icon is the logo mark (generated PNGs). Light only.
