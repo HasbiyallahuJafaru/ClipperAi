@@ -162,7 +162,7 @@ ClipperAi/
     │   ├── app/api/        server-side proxy that adds the backend key (the browser never sees it)
     │   ├── check.mjs       proxy checks against a running site
     │   ├── walkthrough.mjs clicks through every flow in headless Edge
-    │   └── .env.example    BACKEND_URL + BACKEND_API_KEY template
+    │   └── .env.example    BACKEND_URL + Clerk keys template
     └── mcp/                MCP server (Phase 8; may live in the backend instead)
 ```
 
@@ -236,7 +236,9 @@ All settings live in `apps/backend/.env` (copy of [`.env.example`](apps/backend/
 |---|---|---|
 | `GROQ_API_KEY` | worker | Groq key for transcription. |
 | `DEEPSEEK_API_KEY` | worker | DeepSeek key for clip selection and copy. |
-| `API_KEY` | API | Shared secret every API request must send as `Authorization: Bearer <API_KEY>`. Use a long random string, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Replaced by per-user accounts later. |
+| `CLERK_SECRET_KEY` | API, fixture | Clerk secret key of the linked Clerk app. The API accepts only Clerk session tokens. Get it with `clerk env pull --file <a temporary file>` and copy just this line. |
+| `CLERK_AUTHORIZED_PARTIES` | API | Site origins allowed to present session tokens, comma-separated. Default `http://127.0.0.1:3000,http://localhost:3000`. |
+| `BUFFER_OWNERS` | API | Clerk user or organization ids allowed to publish through `BUFFER_API_KEY` (it posts to one person's social accounts). `dev.py --fake-buffer` sets `*`. |
 | `DATABASE_URL` | API, worker | Postgres connection string. **Leave blank locally**: a development Postgres starts automatically in `apps/backend/pgdata` (requires `pgserver`) and keeps running between sessions. Set it in production. |
 | `WORKER_CONCURRENCY` | worker | How many projects one worker processes at once. Default `1`. Each running project uses one FFmpeg process, so size this to the machine's CPU and memory. |
 | `S3_ENDPOINT` | API, worker | For R2: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`. |
@@ -253,7 +255,8 @@ server, never sent to the browser:
 | Variable | Description |
 |---|---|
 | `BACKEND_URL` | Where the backend API runs, e.g. `http://127.0.0.1:8000`. |
-| `BACKEND_API_KEY` | The same value as `API_KEY` in `apps/backend/.env`. |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY` | Written by `clerk init` / `clerk env pull`. The secret key stays on the server. |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL`, `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | `/sign-in` and `/sign-up`. |
 
 ---
 
@@ -268,7 +271,7 @@ python dev.py
 ```
 
 Starts everything in one process: the API on `http://127.0.0.1:8000`, one worker, the local database, and a fake
-in-memory S3 server (moto) on port 9000 in place of R2. Only the Groq, DeepSeek and `API_KEY` settings are needed.
+in-memory S3 server (moto) on port 9000 in place of R2. Only the Groq, DeepSeek and `CLERK_SECRET_KEY` settings are needed.
 Stored clips disappear when you stop it. Needs `pip install pgserver "moto[server]"`.
 
 `python dev.py --fake-buffer` also swaps Buffer for an in-memory stand-in with six demo channels, so publishing can be
@@ -297,8 +300,8 @@ The website (`apps/website`, Next.js + TypeScript + Tailwind) talks to the backe
 ```bash
 cd apps/website
 npm install
-cp .env.example .env.local     # set BACKEND_API_KEY to the same value as API_KEY in apps/backend/.env
-npm run dev                    # http://127.0.0.1:3000  (or: npm run build && npm run start)
+clerk init --app <your Clerk app id>   # installs @clerk/nextjs and writes the Clerk keys to .env.local
+npm run dev                    # http://localhost:3000  (or: npm run build && npm run start)
 ```
 
 | Page | What it does |
@@ -312,21 +315,24 @@ npm run dev                    # http://127.0.0.1:3000  (or: npm run build && np
 | `/checkout?plan=pro` | Order summary ($0.00 due while payments are switched off) and **Start plan**. |
 | `/settings/billing` | Current plan, this month's usage against its limits, change or cancel the plan, billing history. |
 
-The browser only ever calls the website's own `/api/*` routes. The website's server forwards them to the backend and
-adds `BACKEND_API_KEY`, so the key never reaches the browser. Uploads go from the browser straight to storage through
-the signed link.
+Accounts are [Clerk](https://clerk.com): sign in and sign up from the header (`/sign-in`, `/sign-up`). The home page
+and pricing are public; every other page asks you to sign in. The browser only ever calls the website's own `/api/*`
+routes; the website's server forwards them to the backend with the signed-in user's Clerk session token, and the
+backend verifies it and shows only that account's projects, plan and posts (the active Clerk organization's when one
+is selected). Uploads go from the browser straight to storage through the signed link.
 
-> **Local only for now.** There is no sign-in yet, so anyone who can open the website can use the backend through it.
-> `npm run dev` and `npm run start` listen on `127.0.0.1` only. Don't deploy the website publicly until accounts
-> exist (Phase 9).
+> **Local only for now.** `npm run dev` and `npm run start` listen on `localhost` only (Next's `proxy.ts` forwards to
+> `localhost` internally, so binding `127.0.0.1` breaks it). Publishing still goes through one Buffer account
+> (`BUFFER_OWNERS`), so each account needs its own publishing connection before the site goes public.
 
 ---
 
 ## API reference
 
 This is the backend the website runs on (for development and the website itself; people use ClipperAi through the
-website or MCP). Every request needs `Authorization: Bearer <API_KEY>`. Bodies and responses are JSON. The examples use a shell
-variable: `export API_KEY=...`.
+website or MCP). Every request needs `Authorization: Bearer <Clerk session token>` and acts for that account. Bodies
+and responses are JSON. The examples use a shell variable holding a session token: `export TOKEN=...` (a signed-in
+page gets one with `await window.Clerk.session.getToken()`; tokens last about a minute).
 
 | Method | Path | What it does | Success |
 |---|---|---|---|
@@ -359,7 +365,7 @@ request limit or couldn't be reached (the message says which and what to do).
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/projects \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"source": "https://youtu.be/VIDEO_ID", "clips": 10, "min_seconds": 30, "max_seconds": 60}'
 ```
 
@@ -376,7 +382,7 @@ Uploads go directly from the client to storage, never through the API server.
 ```bash
 # 1. Ask for an upload link (size in bytes, any video/* type, up to 5 GB)
 curl -X POST http://127.0.0.1:8000/api/uploads \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"content_type": "video/mp4", "size": 734003200}'
 # -> {"source": "upload:3f6c...", "upload_url": "https://...", "method": "PUT",
 #     "headers": {"Content-Type": "video/mp4"}, "expires_in": 3600}
@@ -386,7 +392,7 @@ curl -X PUT "<upload_url>" -H "Content-Type: video/mp4" --upload-file podcast.mp
 
 # 3. Start the project with the returned source
 curl -X POST http://127.0.0.1:8000/api/projects \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"source": "upload:3f6c..."}'
 ```
 
@@ -414,7 +420,7 @@ project.
 
 ```bash
 curl -X PATCH http://127.0.0.1:8000/api/projects/<id>/clips/1 \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"review": "approved", "title": "A better title"}'
 ```
 
@@ -458,12 +464,12 @@ Clips are published through [Buffer](https://buffer.com). Connect your social ac
 there (Settings → API) and set it as `BUFFER_API_KEY`. ClipperAi never asks for social passwords.
 
 ```bash
-curl http://127.0.0.1:8000/api/publishing/channels -H "Authorization: Bearer $API_KEY"
+curl http://127.0.0.1:8000/api/publishing/channels -H "Authorization: Bearer $TOKEN"
 # -> [{"id": "...", "service": "tiktok", "name": "yourhandle", "displayName": "Your Name",
 #      "isDisconnected": false, "isLocked": false, "usable": true}, ...]
 
 curl -X POST http://127.0.0.1:8000/api/projects/<id>/clips/1/publish \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"channels": ["<channel id>", "<channel id>"], "due_at": "2026-09-20T15:00:00Z"}'
 # -> one publication per channel: {"id": "...", "service": "tiktok", "status": "scheduled", "due_at": ..., "error": null}
 ```
@@ -493,7 +499,7 @@ website):
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/projects/<id>/calendar/plan \
-  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{"channels": ["<channel id>"], "days": [1, 3, 5], "times": ["09:00", "18:00"], "start": "2026-09-21",
        "timezone": "Europe/London"}'
 # -> {"posts": [{"clip_idx": 1, "title": "...", "due_at": "2026-09-21T08:00:00Z"}, ...], "left": []}
@@ -609,8 +615,9 @@ so it keeps working even if the backend is down. R2 removes expired objects with
 
 - **Secrets stay in `.env`**, which is ignored by git. API keys are never sent to clients: the website's server adds
   the backend key when it forwards requests, and refuses requests coming from other sites.
-- **Every API request is authenticated** with a bearer key (per-user accounts come later). The website has no sign-in
-  yet, so it only listens on `127.0.0.1`.
+- **Every API request is authenticated** with a Clerk session token, verified by the backend with Clerk's SDK, and
+  every query is limited to the caller's account, so one account can't read or change another's projects, plans or
+  posts. The website only listens on `localhost` while publishing still uses one Buffer account.
 - **Usage limits are enforced in the backend**, not in the website, so no client can skip them.
 - **No payment data.** Payments are switched off; there is no card form and nothing is charged. When payments go live
   they'll use a provider's hosted checkout, so card details never touch ClipperAi's servers.
@@ -682,7 +689,7 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 |---|---|
 | `ffmpeg` / `ffprobe` not found | Install FFmpeg and open a new terminal so the updated PATH is picked up. |
 | `missing GROQ_API_KEY, ...` | Fill in `apps/backend/.env` and save it. |
-| API fails to start: `set API_KEY, S3_...` | The API needs `API_KEY` and all four `S3_*` settings. |
+| API fails to start: `set CLERK_SECRET_KEY, S3_...` | The API needs `CLERK_SECRET_KEY` and all four `S3_*` settings. |
 | YouTube: *"Sign in to confirm you're not a bot"* | YouTube blocks many server and cloud IP addresses. Upload the file instead, or run from a residential connection. |
 | YouTube download finds no formats | Install Node.js or Deno; yt-dlp needs a JavaScript runtime for YouTube. |
 | Upload `PUT` returns 403 | Send exactly the `Content-Type` you requested the upload link with, and upload within an hour. |
@@ -690,7 +697,8 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | Download link returns an error | Links last 24 hours; request the project again. After 30 days the files are deleted. |
 | Rendering is slow | Rendering is CPU-bound. Lower `WORKER_CONCURRENCY` on small machines, or run more worker machines. |
 | Website: *"Can't reach the ClipperAi backend"* | Start the backend (`python dev.py`) and check `BACKEND_URL` in `apps/website/.env.local`. |
-| Website: `401 invalid API key` | `BACKEND_API_KEY` in `apps/website/.env.local` must equal `API_KEY` in `apps/backend/.env`. Restart the website after changing it. |
+| Website: *Sign in to continue.* while signed in | The backend couldn't verify the session: `CLERK_SECRET_KEY` in `apps/backend/.env` must belong to the same Clerk app as the website's keys, and the site's address must be in `CLERK_AUTHORIZED_PARTIES`. |
+| Signed in, but pages act signed out (server log: *unable to resolve handshake*) | The website's server can't reach Clerk over HTTPS. Behind an HTTPS-scanning antivirus, start it with `NODE_EXTRA_CA_CERTS=<CA bundle>`; the backend needs `SSL_CERT_FILE=<CA bundle>`. |
 | Locally, downloads over ~1–2 MB stall and reset (`RetriesExceededError`, `WinError 10054`), or yt-dlp says `CERTIFICATE_VERIFY_FAILED` | Antivirus web scanning (seen with Avast Web Shield) is intercepting the traffic, even on `127.0.0.1`. Add exceptions for `127.0.0.1`/`localhost` and HTTPS scanning, or pause it while testing. |
 | `402 Choose a plan to start making clips.` | Pick any plan on `/pricing` (free while payments are switched off). |
 | Publishing: *"Buffer isn't connected yet"* / *"Buffer didn't accept the API key"* | Create a key in Buffer (Settings → API), put it in `BUFFER_API_KEY` and restart the API. |
@@ -718,8 +726,8 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 
 Known limitations today:
 
-- There's one shared API key and no sign-in on the website; per-user accounts arrive with billing, so the website is
-  for local use until then. Plans and usage belong to that single workspace.
+- Accounts use Clerk's development instance; a production instance and domain come with deployment. Publishing still
+  runs through one Buffer account (`BUFFER_OWNERS`), so each account needs its own connection before a public launch.
 - Payments are switched off: plans show prices but charge nothing. No payment provider is connected yet.
 - Publishing uses one Buffer account (the workspace's key), every YouTube upload gets the "People & Blogs" category,
   and the public bucket uses Cloudflare's rate-limited `r2.dev` address until a custom domain is connected.

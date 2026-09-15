@@ -1,11 +1,13 @@
-"""Test data for apps/website/walkthrough.mjs, against `python dev.py` only (local dev database + fake S3).
-Removes the workspace's plan and adds a completed project with two clips (tiny media, real clip text).
-Prints: <project id> <media folder>.   usage: python dev_fixture.py"""
+"""Test data for apps/website/walkthrough.mjs, against `python dev.py` only (local dev database + fake S3) and the
+Clerk development instance. Makes (or reuses) the Clerk test user walkthrough+clerk_test@example.com, removes its plan,
+adds a completed project with two clips (tiny media, real clip text) owned by it, and a one-time sign-in ticket.
+Prints: <project id> <media folder> <sign-in ticket>.   usage: python dev_fixture.py"""
 import os
 import shutil
 import subprocess
 import sys
 
+from clerk_backend_api import Clerk
 from psycopg.types.json import Jsonb
 
 os.environ |= {"S3_ENDPOINT": "http://127.0.0.1:9000", "S3_ACCESS_KEY_ID": "dev", "S3_SECRET_ACCESS_KEY": "dev",
@@ -15,9 +17,18 @@ import clipper  # noqa: E402
 clipper.load_env()  # same settings dev.py sees
 if os.environ.get("DATABASE_URL"):
     sys.exit("refusing: DATABASE_URL is set; this only runs against the local dev database")
+if not os.environ.get("CLERK_SECRET_KEY", "").startswith("sk_test_"):
+    sys.exit("refusing: CLERK_SECRET_KEY must be a development (sk_test_) key")
 import db  # noqa: E402
 import jobs  # noqa: E402
 import storage  # noqa: E402
+
+EMAIL = "walkthrough+clerk_test@example.com"  # Clerk test address: no real email is ever sent
+clerk = Clerk(bearer_auth=os.environ["CLERK_SECRET_KEY"])
+users = clerk.users.list(request={"email_address": [EMAIL]})
+user = users[0] if users else clerk.users.create(email_address=[EMAIL], username="walkthrough_test",
+                                                 skip_password_requirement=True)  # this Clerk app requires a username
+ticket = clerk.sign_in_tokens.create(request={"user_id": user.id, "expires_in_seconds": 3600}).token
 
 media = jobs.TMP / "fixture-media"
 shutil.rmtree(media, ignore_errors=True)
@@ -39,10 +50,10 @@ for i, color in ((1, "0x1d4ed8"), (2, "0x15803d")):  # ~25 KB each: small enough
     (media / f"clip{i:02}.ass").write_text(clipper.captions([], 0, 4, clips[i - 1]["hook"]), encoding="utf-8")
 
 with db.connect() as c:
-    c.execute("delete from subscriptions")  # the walkthrough starts without a plan
-    project = c.execute("insert into projects (source, options, status, finished_at) values"
-                        " ('https://youtu.be/VTLnDqjfRZQ', %s, 'completed', now()) returning id",
-                        (Jsonb({"n": 2, "min_len": 30, "max_len": 60}),)).fetchone()["id"]
+    c.execute("delete from subscriptions where owner = %s", (user.id,))  # the walkthrough starts without a plan
+    project = c.execute("insert into projects (owner, source, options, status, finished_at) values"
+                        " (%s, 'https://youtu.be/VTLnDqjfRZQ', %s, 'completed', now()) returning id",
+                        (user.id, Jsonb({"n": 2, "min_len": 30, "max_len": 60}))).fetchone()["id"]
     for i, clip in enumerate(clips, 1):
         c.execute("insert into clips (project_id, idx, start_s, end_s, score, reason, hook, title, description,"
                   " hashtags, posts) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
@@ -50,4 +61,4 @@ with db.connect() as c:
                    clip["description"], Jsonb(clip["hashtags"]), Jsonb(clip["posts"])))
 for f in sorted(media.glob("clip*")):
     storage.put(f, f"projects/{project}/{f.name}", jobs.CONTENT_TYPES[f.suffix])
-print(project, media)
+print(project, media, ticket)

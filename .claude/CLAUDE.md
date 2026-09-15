@@ -19,6 +19,16 @@ The backend REST API is the website's backend, not a separate product channel. C
 subscription checks and usage limits are enforced once, in the backend services** (`jobs.py`, `billing.py`,
 `publishing.py`), never re-implemented per channel.
 
+### Accounts: Clerk (user decision, 2026-09-15)
+**Use Clerk for everything it offers around accounts** instead of building our own: sign-in/sign-up UI, the user
+database (we store only Clerk user ids as owners, no users/passwords table), sessions and token verification in the
+backend, Clerk Organizations for teams/workspaces, and OAuth sign-in for MCP clients. Clerk app id:
+`app_3JMJIEqTu79eUjLFgFDsRzpNa7h` (always pass `--app` to `clerk init`). Website: `@clerk/nextjs` (`ClerkProvider` inside
+`<body>`, `await auth()`, Next 16 `proxy.ts` matcher includes `'/__clerk/:path*'` after `'/(api|trpc)(.*)'`). Never expose
+`CLERK_SECRET_KEY` to client code; don't read or print env files. Payments stay off; if they're switched on, ask
+whether to use Clerk Billing before choosing a provider. **Built 2026-09-15:** sign-in/up + protected pages, backend
+token verification, per-owner data. Next: MCP with Clerk OAuth.
+
 Build progress, what's left and lessons learned: @memory.md — **read it before starting work and update it after
 every milestone** (what was done, how it was verified, what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
 
@@ -63,7 +73,10 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
 - Secrets only in `apps/backend/.env` (template: `.env.example`); no API keys in the frontend or MCP responses.
 - Subprocess calls use argument arrays, never shell strings with user input.
 - Sources must pass `jobs.public_url` (http/https, public IPs only) or be `upload:<uuid>` that exists in storage.
-- Every API route requires `Authorization: Bearer <API_KEY>` until per-user auth exists. MCP is never anonymous.
+- Every API route requires a verified Clerk session token (`api.signed_in`) and acts for its owner: the active Clerk
+  organization id, else the user id. Every service function takes `owner` and filters by it; never add a query that
+  reads or changes projects, plans or posts without it (test_jobs.py checks another account sees nothing). MCP is
+  never anonymous.
 - **Licensing**: no GPL/AGPL code in the product without explicit evaluation (e.g. Ultralytics YOLO and Postiz are
   AGPL — avoid). Prefer MIT/Apache/BSD. Every dependency goes in `DECISIONS.md`.
 
@@ -97,15 +110,22 @@ export PATH="$PATH:/c/Users/USER/AppData/Local/Microsoft/WinGet/Links"   # ffmpe
 .venv/Scripts/python storage.py setup       # once per bucket: lifecycle + CORS
 ```
 
-Website (run from `apps/website`; backend must be running, `.env.local` has `BACKEND_URL` + `BACKEND_API_KEY`):
+Backend `.env` also needs `CLERK_SECRET_KEY` (and on this PC `SSL_CERT_FILE=<CA bundle>`, or Clerk's SDK hangs behind
+Avast); `BUFFER_OWNERS` lists the Clerk ids allowed to publish through the workspace's Buffer key.
+
+Website (run from `apps/website`; backend must be running; `.env.local` has `BACKEND_URL` + the Clerk keys):
 ```bash
-NODE_EXTRA_CA_CERTS=C:/Users/USER/.certs/ca-bundle-with-windows-roots.pem npm install   # Avast breaks npm TLS here
-npm run dev                  # http://127.0.0.1:3000 (npm run build && npm run start for the production build)
-node check.mjs               # proxy checks against the running site (no paid calls)
-# browser walkthrough of every flow incl. publishing + content calendar (headless Edge via DevTools protocol; backend
-# must be `dev.py --fake-buffer`; changes the local dev DB, clean it afterwards):
-cd ../backend && .venv/Scripts/python dev_fixture.py   # prints <project id> <media folder>
-cd ../website && node walkthrough.mjs <project id> <media folder>
+export NODE_EXTRA_CA_CERTS=C:/Users/USER/.certs/ca-bundle-with-windows-roots.pem  # this PC: npm AND the Next server
+                             # (without it Clerk's handshake fails and signed-in users look signed out)
+npm install
+npm run dev                  # http://localhost:3000 (binds localhost, not 127.0.0.1: proxy.ts forwards to localhost)
+                             # npm run build && npm run start for the production build
+node check.mjs               # signed-out checks: API 401, CSRF 403, public pages 200, private pages -> /sign-in
+# browser walkthrough of every flow, signed in as the Clerk test user walkthrough+clerk_test@example.com (headless Edge
+# via DevTools protocol; backend must be `dev.py --fake-buffer`; changes the local dev DB, clean it afterwards):
+cd ../backend && .venv/Scripts/python dev_fixture.py   # prints <project id> <media folder> <sign-in ticket>
+cd ../website && node walkthrough.mjs <project id> <media folder> <sign-in ticket>
+clerk doctor                 # Clerk integration health (CLI 3.3, logged in, linked to app_3JMJIEqTu79eUjLFgFDsRzpNa7h)
 ```
 Payments are switched off on purpose (user, 2026-09-14): plans show prices but subscribing charges nothing. Don't add a
 payment provider or card form unless the user asks.

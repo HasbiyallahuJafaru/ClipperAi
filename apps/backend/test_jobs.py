@@ -32,6 +32,8 @@ import jobs  # noqa: E402
 import storage  # noqa: E402
 from jobs import NewProject, NewUpload  # noqa: E402
 
+ME, OTHER = "user_test_me", "org_test_other"  # Clerk owners: a signed-in user, and someone else's organization
+
 
 def http(method, url, data=None, headers=None):
     with urllib.request.urlopen(urllib.request.Request(url, data, headers or {}, method=method)) as response:
@@ -79,21 +81,27 @@ def refuses(make, why, words):
 
 
 # plans: nothing starts without one; choosing one activates it at once and charges nothing; one active at a time
-refuses(lambda: jobs.create_project(NewProject(source="https://example.com/video")), "started without a plan",
+refuses(lambda: jobs.create_project(ME, NewProject(source="https://example.com/video")), "started without a plan",
         "Choose a plan")
 rejects(lambda: billing.Subscribe(plan="free"), "accepted an unknown plan")
-creator = billing.subscribe("creator")
+creator = billing.subscribe(ME, "creator")
 assert creator["status"] == "active" and creator["price_cents"] == 1500 and creator["charged_cents"] == 0
-assert billing.subscribe("creator")["id"] == creator["id"], "choosing the current plan changes nothing"
-business = billing.subscribe("business")
-assert billing.current()["id"] == business["id"]
-assert [s["plan"] for s in billing.summary()["history"]] == ["business", "creator"]
+assert billing.subscribe(ME, "creator")["id"] == creator["id"], "choosing the current plan changes nothing"
+business = billing.subscribe(ME, "business")
+assert billing.current(ME)["id"] == business["id"]
+assert [s["plan"] for s in billing.summary(ME)["history"]] == ["business", "creator"]
 try:
     with db.connect() as c:
-        c.execute("insert into subscriptions (plan, price_cents) values ('pro', 3900)")
+        c.execute("insert into subscriptions (owner, plan, price_cents) values (%s, 'pro', 3900)", (ME,))
     raise AssertionError("allowed two active plans")
 except psycopg.errors.UniqueViolation:
     pass
+# plans belong to one account: someone else has none, and choosing one leaves mine alone
+assert billing.current(OTHER) is None and billing.summary(OTHER)["history"] == []
+refuses(lambda: jobs.create_project(OTHER, NewProject(source="https://example.com/video")), "other account has no plan",
+        "Choose a plan")
+assert billing.subscribe(OTHER, "creator")["owner"] == OTHER and billing.current(ME)["id"] == business["id"]
+assert billing.cancel(OTHER)["owner"] == OTHER and billing.current(ME)["id"] == business["id"]
 
 
 def upload(data=b"fake video"):
@@ -120,7 +128,7 @@ def fake_run(behaviour):
         if behaviour == "permanent":
             raise clipper.PermanentError("no speech found")
         if behaviour == "cancel":
-            jobs.cancel_project(current["id"])
+            jobs.cancel_project(ME, current["id"])
             progress("rendering")
         out.mkdir(parents=True, exist_ok=True)
         for ext in ("mp4", "ass", "jpg"):
@@ -133,7 +141,7 @@ def fake_run(behaviour):
 
 
 def status(project):
-    return jobs.get_project(project["id"])
+    return jobs.get_project(ME, project["id"])
 
 
 def upload_exists(source):
@@ -142,7 +150,7 @@ def upload_exists(source):
 
 # uploaded source, success: worker fetches the upload, clips land in storage behind signed links, local + source cleaned
 source = upload()
-p = jobs.create_project(NewProject(source=source, clips=3))
+p = jobs.create_project(ME, NewProject(source=source, clips=3))
 assert p["status"] == "queued" and p["message"] == "Waiting to start..."
 clipper.run = fake_run("ok")
 current = jobs.claim()
@@ -166,22 +174,29 @@ with urllib.request.urlopen(clip["video_url"]) as response:  # links save as fil
 # review: approve + edit copy, omitted fields untouched, empty hashtags allowed, bad values rejected, missing clip None
 assert clip["review"] == "pending"
 posts = clip["posts"] | {"x": "edited post"}
-edited = jobs.update_clip(p["id"], 1, jobs.ClipEdit(review="approved", title="Better title", posts=posts, hashtags=[]))
+edited = jobs.update_clip(ME, p["id"], 1, jobs.ClipEdit(review="approved", title="Better title", posts=posts, hashtags=[]))
 assert edited["review"] == "approved" and edited["title"] == "Better title" and edited["hashtags"] == []
 assert edited["posts"]["x"] == "edited post" and edited["description"] == "d" and edited["hook"] == "h"
-assert jobs.update_clip(p["id"], 1, jobs.ClipEdit(review="rejected"))["title"] == "Better title"
+assert jobs.update_clip(ME, p["id"], 1, jobs.ClipEdit(review="rejected"))["title"] == "Better title"
 assert status(p)["clips"][0]["review"] == "rejected"
-assert jobs.update_clip(p["id"], 99, jobs.ClipEdit(review="approved")) is None
+assert jobs.update_clip(ME, p["id"], 99, jobs.ClipEdit(review="approved")) is None
 rejects(lambda: jobs.ClipEdit(review="maybe"), "accepted an unknown review state")
 rejects(lambda: jobs.ClipEdit(title=""), "accepted an empty title")
 rejects(lambda: jobs.ClipEdit(posts={"x": "only one platform"}), "accepted incomplete posts")
 first = p
-assert [x["clip_count"] for x in jobs.list_projects() if x["id"] == p["id"]] == [1]
+assert [x["clip_count"] for x in jobs.list_projects(ME) if x["id"] == p["id"]] == [1]
+
+# another account can't see, change, download, cancel or delete it
+assert jobs.get_project(OTHER, p["id"]) is None and jobs.list_projects(OTHER) == []
+assert jobs.update_clip(OTHER, p["id"], 1, jobs.ClipEdit(review="approved")) is None
+assert status(p)["clips"][0]["review"] == "rejected", "the other account's edit must not land"
+assert jobs.content_package(OTHER, p["id"]) is None and jobs.cancel_project(OTHER, p["id"]) is None
+assert jobs.delete_project(OTHER, p["id"]) is None and status(p)
 
 # content package: rejected clips stay out (nothing left -> None); the ZIP carries the files and the edited copy
-assert jobs.content_package(p["id"]) is None and jobs.content_package(uuid4()) is None
-jobs.update_clip(p["id"], 1, jobs.ClipEdit(review="approved"))
-package = zipfile.ZipFile(io.BytesIO(b"".join(jobs.content_package(p["id"]))))
+assert jobs.content_package(ME, p["id"]) is None and jobs.content_package(ME, uuid4()) is None
+jobs.update_clip(ME, p["id"], 1, jobs.ClipEdit(review="approved"))
+package = zipfile.ZipFile(io.BytesIO(b"".join(jobs.content_package(ME, p["id"]))))
 assert sorted(package.namelist()) == ["captions/clip01.ass", "metadata/clips.csv", "metadata/clips.json",
                                       "thumbnails/clip01.jpg", "videos/clip01.mp4"], package.namelist()
 assert package.read("videos/clip01.mp4") == b"clip mp4" and package.read("thumbnails/clip01.jpg") == b"clip jpg"
@@ -193,11 +208,11 @@ assert row["x"] == "edited post" and row["review"] == "approved" and row["hook"]
 # expired files: no links handed out, nothing to package
 with db.connect() as c:
     c.execute("update projects set finished_at = now() - interval '31 days' where id = %s", (p["id"],))
-assert "video_url" not in status(p)["clips"][0] and jobs.content_package(p["id"]) is None
+assert "video_url" not in status(p)["clips"][0] and jobs.content_package(ME, p["id"]) is None
 
 # transient failure: requeued with backoff, upload kept for the retry; failed + upload deleted once attempts run out
 source = upload()
-p = jobs.create_project(NewProject(source=source))
+p = jobs.create_project(ME, NewProject(source=source))
 clipper.run = fake_run("crash")
 jobs.run_job(jobs.claim())
 retrying = status(p)
@@ -211,7 +226,7 @@ jobs.run_job(jobs.claim())
 assert status(p)["status"] == "failed" and status(p)["finished_at"] and not upload_exists(source)
 
 # permanent error: failed immediately, no retry
-p = jobs.create_project(NewProject(source="https://example.com/video"))
+p = jobs.create_project(ME, NewProject(source="https://example.com/video"))
 clipper.run = fake_run("permanent")
 jobs.run_job(jobs.claim())
 assert status(p)["status"] == "failed" and status(p)["attempts"] == 1
@@ -219,17 +234,17 @@ assert status(p)["detail"] == "no speech found", "a permanent error's message is
 
 # cancel: queued cancels at once (and drops its upload); running stops at the next step; finished can't be cancelled
 source = upload()
-p = jobs.create_project(NewProject(source=source))
-assert jobs.cancel_project(p["id"])["status"] == "cancelled" and jobs.claim() is None and not upload_exists(source)
-assert jobs.cancel_project(p["id"]) is None
-p = jobs.create_project(NewProject(source="https://example.com/video"))
+p = jobs.create_project(ME, NewProject(source=source))
+assert jobs.cancel_project(ME, p["id"])["status"] == "cancelled" and jobs.claim() is None and not upload_exists(source)
+assert jobs.cancel_project(ME, p["id"]) is None
+p = jobs.create_project(ME, NewProject(source="https://example.com/video"))
 clipper.run = fake_run("cancel")
 current = jobs.claim()
 jobs.run_job(current)
 assert status(p)["status"] == "cancelled"
 
 # crashed worker: no heartbeat for 2+ minutes -> the next claim requeues and retakes it
-p = jobs.create_project(NewProject(source="https://example.com/video"))
+p = jobs.create_project(ME, NewProject(source="https://example.com/video"))
 jobs.claim()
 with db.connect() as c:
     c.execute("update projects set heartbeat_at = now() - interval '5 minutes' where id = %s", (p["id"],))
@@ -237,15 +252,15 @@ again = jobs.claim()
 assert again["id"] == p["id"] and again["attempts"] == 2
 
 # delete: running projects refuse (cancel first); finished ones go with their clips and stored files
-assert jobs.delete_project(again["id"]) is None and status(again)
-assert jobs.delete_project(first["id"])["id"] == first["id"]
+assert jobs.delete_project(ME, again["id"]) is None and status(again)
+assert jobs.delete_project(ME, first["id"])["id"] == first["id"]
 assert status(first) is None and storage.size(f"projects/{first['id']}/clip01.mp4") is None
 with db.connect() as c:
     assert c.execute("select count(*) from clips where project_id = %s", (first["id"],)).fetchone()["count"] == 0
-assert jobs.delete_project(first["id"]) is None
+assert jobs.delete_project(ME, first["id"]) is None
 source = upload()
-p = jobs.create_project(NewProject(source=source))
-assert jobs.delete_project(p["id"]) and not upload_exists(source), "deleting a queued project drops its upload"
+p = jobs.create_project(ME, NewProject(source=source))
+assert jobs.delete_project(ME, p["id"]) and not upload_exists(source), "deleting a queued project drops its upload"
 
 # transcript cache round-trip
 jobs.save_transcript("Youtube-x", {"language": "en", "segments": [], "words": []})
@@ -259,41 +274,43 @@ with db.connect() as c:
 jobs.save_transcript("Youtube-2h", {"language": "en", "words": [], "segments": [{"start": 0, "end": 7200, "text": "x"}]})
 
 
-def add_project(status_, created="now()"):
+def add_project(status_, created="now()", owner=ME):
     with db.connect() as c:
-        return c.execute(f"insert into projects (source, options, status, source_key, created_at) values"
-                         f" ('https://example.com/v', '{{}}', %s, 'Youtube-2h', {created}) returning id",
-                         (status_,)).fetchone()["id"]
+        return c.execute(f"insert into projects (owner, source, options, status, source_key, created_at) values"
+                         f" (%s, 'https://example.com/v', '{{}}', %s, 'Youtube-2h', {created}) returning id",
+                         (owner, status_)).fetchone()["id"]
 
 
 for status_ in ("completed", "failed", "cancelled", "queued"):
     add_project(status_)
 add_project("completed", "now() - interval '40 days'")
-assert billing.usage() == {"videos": 2, "minutes": 120, "clips": 0}, billing.usage()
+add_project("completed", owner=OTHER)  # someone else's video doesn't use my allowance
+assert billing.usage(OTHER) == {"videos": 1, "minutes": 120, "clips": 0}
+assert billing.usage(ME) == {"videos": 2, "minutes": 120, "clips": 0}, billing.usage(ME)
 
 # limits: Creator = 5 videos, 5 hours, 50 clips
-billing.subscribe("creator")
-assert billing.allowance() == {"videos": 3, "seconds": 3 * 3600, "clips": 50}
+billing.subscribe(ME, "creator")
+assert billing.allowance(ME) == {"videos": 3, "seconds": 3 * 3600, "clips": 50}
 for _ in range(3):
     queued = add_project("queued")
-refuses(lambda: jobs.create_project(NewProject(source="https://example.com/video")), "started a 6th video",
+refuses(lambda: jobs.create_project(ME, NewProject(source="https://example.com/video")), "started a 6th video",
         "all 5 videos")
-assert billing.allowance()["videos"] == 0, "projects already queued still get processed"
+assert billing.allowance(ME)["videos"] == 0, "projects already queued still get processed"
 add_project("completed")
 add_project("completed")  # 6 hours of video now
-refuses(billing.allowance, "processed past the hours", "hours of video")
+refuses(lambda: billing.allowance(ME), "processed past the hours", "hours of video")
 with db.connect() as c:  # the worker refuses too, and says why
     c.execute("update projects set status = 'cancelled' where status = 'queued' and id <> %s", (queued,))
 jobs.run_job(jobs.claim())
 assert status({"id": queued})["status"] == "failed" and "5 hours of video" in status({"id": queued})["detail"]
-billing.subscribe("pro")  # 15 hours, 150 clips
+billing.subscribe(ME, "pro")  # 15 hours, 150 clips
 with db.connect() as c:
     c.execute("""insert into clips (project_id, idx, start_s, end_s, score, reason, hook, title, description, hashtags,
                                     posts)
                  select %s, i, 0, 1, 1, '', '', 't', '', '[]', '{}' from generate_series(1, 150) i""", (queued,))
-refuses(billing.allowance, "made clips past the plan", "all 150 clips")
-assert billing.cancel()["status"] == "ended" and billing.current() is None and billing.cancel() is None
-refuses(billing.allowance, "processed without a plan", "Choose a plan")
+refuses(lambda: billing.allowance(ME), "made clips past the plan", "all 150 clips")
+assert billing.cancel(ME)["status"] == "ended" and billing.current(ME) is None and billing.cancel(ME) is None
+refuses(lambda: billing.allowance(ME), "processed without a plan", "Choose a plan")
 
 # publishing through a fake Buffer (same answers and refusals as the real one)
 import fake_buffer  # noqa: E402
@@ -306,8 +323,8 @@ buffer = fake_buffer.FakeBuffer()
 publishing.API = buffer.url
 now = datetime.now(timezone.utc)
 with db.connect() as c:
-    pid = c.execute("insert into projects (source, options, status, finished_at) values"
-                    " ('https://example.com/v', '{}', 'completed', now()) returning id").fetchone()["id"]
+    pid = c.execute("insert into projects (owner, source, options, status, finished_at) values"
+                    " (%s, 'https://example.com/v', '{}', 'completed', now()) returning id", (ME,)).fetchone()["id"]
     for i in (1, 2):
         c.execute("""insert into clips (project_id, idx, start_s, end_s, score, reason, hook, title, description,
                                         hashtags, posts) values (%s, %s, 0, 30, 90, 'r', 'h', %s, 'd', '[]', %s)""",
@@ -325,11 +342,11 @@ def cannot(make, words, status=None):
 
 
 def publish(idx, channels, due_at=None):
-    return publishing.publish(pid, idx, publishing.Publish(channels=channels, due_at=due_at))
+    return publishing.publish(ME, pid, idx, publishing.Publish(channels=channels, due_at=due_at))
 
 
 def rows():
-    return {(r["clip_idx"], r["service"]): r for r in publishing.publications(pid)["publications"]}
+    return {(r["clip_idx"], r["service"]): r for r in publishing.publications(ME, pid)["publications"]}
 
 
 def public_copy(publication):
@@ -340,13 +357,18 @@ def public_copy(publication):
         return None
 
 
+# the workspace's Buffer account posts to one person's socials: only the owners in BUFFER_OWNERS may use it
+os.environ["BUFFER_OWNERS"] = ME
+cannot(lambda: publishing.channels(OTHER), "isn't connected for your account")
+assert publishing.publish(OTHER, pid, 1, publishing.Publish(channels=["channel-tiktok"])) is None, "not their clip"
+
 # connecting: no key, a wrong key (what an OAuth failure looks like with keys), then the right one
 os.environ.pop("BUFFER_API_KEY", None)
-cannot(publishing.channels, "BUFFER_API_KEY")
+cannot(lambda: publishing.channels(ME), "BUFFER_API_KEY")
 os.environ["BUFFER_API_KEY"] = "wrong"
-cannot(publishing.channels, "didn't accept the API key", 502)
+cannot(lambda: publishing.channels(ME), "didn't accept the API key", 502)
 os.environ["BUFFER_API_KEY"] = fake_buffer.KEY
-usable = {c["id"].removeprefix("channel-"): c["usable"] for c in publishing.channels()}
+usable = {c["id"].removeprefix("channel-"): c["usable"] for c in publishing.channels(ME)}
 assert usable == {"tiktok": True, "youtube": True, "instagram": True, "twitter": True, "linkedin": False,
                   "pinterest": False, "instagram-personal": False}, usable
 # linkedin is disconnected; Pinterest isn't a network we write for; Buffer won't post to personal Instagram profiles
@@ -354,8 +376,8 @@ assert usable == {"tiktok": True, "youtube": True, "instagram": True, "twitter":
 # only approved clips, only usable channels, only times Buffer can still fetch the video at
 calls = buffer.calls
 cannot(lambda: publish(1, ["channel-tiktok"]), "Approve this clip")
-jobs.update_clip(pid, 1, jobs.ClipEdit(review="approved"))
-jobs.update_clip(pid, 2, jobs.ClipEdit(review="approved"))
+jobs.update_clip(ME, pid, 1, jobs.ClipEdit(review="approved"))
+jobs.update_clip(ME, pid, 2, jobs.ClipEdit(review="approved"))
 assert publish(99, ["channel-tiktok"]) is None
 cannot(lambda: publish(1, ["channel-tiktok"], now - timedelta(minutes=5)), "already passed", 422)
 cannot(lambda: publish(1, ["channel-tiktok"], now + timedelta(days=30, hours=1)), "up to 30 days ahead", 422)
@@ -379,6 +401,10 @@ assert instagram["metadata"]["instagram"]["type"] == "reel"
 assert tiktok["assets"][0]["video"]["url"] == f"{public_url}/{sent[0]['id']}.mp4", "a plain public link, not signed"
 assert all(public_copy(p) == b"clip 1" for p in sent), "each post has its own public copy of the clip"
 cannot(lambda: publish(1, ["channel-tiktok"]), "already scheduled or posted on Clipperdemo")
+os.environ["BUFFER_OWNERS"] = f"{ME},{OTHER}"  # even an account allowed to publish can't see or remove my posts
+assert publishing.publications(OTHER, pid) is None and publishing.remove(OTHER, sent[0]["id"]) is None
+assert rows()[(1, "tiktok")]["id"] == sent[0]["id"]
+os.environ["BUFFER_OWNERS"] = ME
 
 # scheduled post: Buffer gets the time; nothing is asked about it before then
 due = now + timedelta(days=2)
@@ -401,8 +427,8 @@ assert now_rows[(1, "instagram")]["status"] == "error" and now_rows[(1, "instagr
 assert now_rows[(2, "twitter")]["status"] == "scheduled" and buffer.calls == calls + 3, "the future post wasn't asked about"
 assert public_copy(now_rows[(1, "tiktok")]) is None and public_copy(now_rows[(1, "instagram")]) is None
 assert public_copy(now_rows[(2, "twitter")]) == b"clip 2", "copies go once a post is sent or failed, not before"
-assert publishing.publications(uuid4()) is None
-assert publishing.publications(pid)["schedule_until"] <= datetime.now(timezone.utc) + publishing.AHEAD
+assert publishing.publications(ME, uuid4()) is None
+assert publishing.publications(ME, pid)["schedule_until"] <= datetime.now(timezone.utc) + publishing.AHEAD
 
 # a failed post doesn't block trying again; Buffer refusing a post is recorded with its reason
 buffer.fail = "You've reached the limit of scheduled posts for this channel"
@@ -417,15 +443,15 @@ storage.delete_public(f"{early['id']}.mp4")
 with db.connect() as c:
     c.execute("update publications set checked_at = now() - interval '2 minutes' where id = %s", (early["id"],))
 assert rows()[(2, "youtube")]["error"] == "Video could not be read from its URL."
-publishing.remove(early["id"])
+publishing.remove(ME, early["id"])
 
 # rate limit, a key revoked later ("expired token"), Buffer down, Buffer unreachable: readable, nothing half-done
 buffer.fail = "rate_limited"
 cannot(lambda: publish(2, ["channel-tiktok"]), "Try again in 13 minutes", 502)
 assert (2, "tiktok") not in rows(), "refused at the channel lookup: nothing sent, nothing recorded"
-listed, publishing.channels = publishing.channels, lambda: listed_channels  # limit hit between lookup and posting
+listed, publishing.channels = publishing.channels, lambda owner: listed_channels  # limit hit between lookup and posting
 buffer.fail = None
-listed_channels = listed()
+listed_channels = listed(ME)
 buffer.fail = "rate_limited"
 cannot(lambda: publish(2, ["channel-tiktok", "channel-youtube"]), "Try again in 13 minutes", 502)
 publishing.channels = listed
@@ -436,24 +462,24 @@ assert now_rows[(2, "tiktok")]["status"] == "error" and "request limit" in now_r
 assert public_copy(now_rows[(2, "tiktok")]) is None
 assert (2, "youtube") not in now_rows, "stops at the first channel: the rest would hit the same limit"
 buffer.fail = "unauthorized"
-cannot(publishing.channels, "create a new one in Buffer", 502)
+cannot(lambda: publishing.channels(ME), "create a new one in Buffer", 502)
 buffer.fail = "down"
-cannot(publishing.channels, "Buffer had a problem (503)", 502)
+cannot(lambda: publishing.channels(ME), "Buffer had a problem (503)", 502)
 buffer.fail = None
 publishing.API = "http://127.0.0.1:9"
-cannot(publishing.channels, "Couldn't reach Buffer", 502)
+cannot(lambda: publishing.channels(ME), "Couldn't reach Buffer", 502)
 publishing.API = buffer.url
 
 # unschedule, clear failures, refuse posts that went out; posts deleted inside Buffer disappear here too;
 # a project can't be deleted while a post still has to fetch its video
-assert jobs.delete_project(pid) is None
-cannot(lambda: publishing.remove(rows()[(1, "tiktok")]["id"]), "already gone out")
-assert publishing.remove(scheduled["id"])["id"] == scheduled["id"] and scheduled["buffer_post_id"] not in buffer.posts
+assert jobs.delete_project(ME, pid) is None
+cannot(lambda: publishing.remove(ME, rows()[(1, "tiktok")]["id"]), "already gone out")
+assert publishing.remove(ME, scheduled["id"])["id"] == scheduled["id"] and scheduled["buffer_post_id"] not in buffer.posts
 assert public_copy(scheduled) is None, "unscheduling removes the public copy"
-for row in publishing.publications(pid)["publications"]:
+for row in publishing.publications(ME, pid)["publications"]:
     if row["status"] == "error":
-        assert publishing.remove(row["id"])
-assert publishing.remove(scheduled["id"]) is None
+        assert publishing.remove(ME, row["id"])
+assert publishing.remove(ME, scheduled["id"]) is None
 later = publish(2, ["channel-twitter"], now + timedelta(days=1))[0]
 del buffer.posts[later["buffer_post_id"]]
 with db.connect() as c:
@@ -467,7 +493,7 @@ assert storage.client().list_objects_v2(Bucket="clips-public").get("KeyCount") =
 with db.connect() as c:
     c.execute("update projects set finished_at = now() - interval '31 days' where id = %s", (pid,))
 cannot(lambda: publish(2, ["channel-youtube"]), "expired")
-assert jobs.delete_project(pid)["id"] == pid, "only sent posts left"
+assert jobs.delete_project(ME, pid)["id"] == pid, "only sent posts left"
 with db.connect() as c:
     assert c.execute("select count(*) from publications").fetchone()["count"] == 0
 
@@ -475,8 +501,8 @@ with db.connect() as c:
 from datetime import date, time  # noqa: E402
 
 with db.connect() as c:
-    pid = c.execute("insert into projects (source, options, status, finished_at) values"
-                    " ('https://example.com/v', '{}', 'completed', now()) returning id").fetchone()["id"]
+    pid = c.execute("insert into projects (owner, source, options, status, finished_at) values"
+                    " (%s, 'https://example.com/v', '{}', 'completed', now()) returning id", (ME,)).fetchone()["id"]
     for i in (1, 2, 3, 4):
         c.execute("""insert into clips (project_id, idx, start_s, end_s, score, reason, hook, title, description,
                                         hashtags, posts) values (%s, %s, 0, 30, 90, 'r', 'h', %s, 'd', '[]', %s)""",
@@ -499,13 +525,14 @@ def post_row(publication):
 for bad in ({"timezone": "Mars/Olympus"}, {"timezone": "../../etc/passwd"}, {"days": [0]}, {"days": []},
             {"times": []}, {"channels": []}, {"times": ["25:00"]}):
     rejects(lambda: calendar(**bad), f"accepted calendar {bad}")
-assert publishing.plan(uuid4(), calendar()) is None and publishing.schedule(uuid4(), calendar()) is None
-cannot(lambda: publishing.plan(pid, calendar()), "Approve the clips you want to schedule first")
+assert publishing.plan(ME, uuid4(), calendar()) is None and publishing.schedule(ME, uuid4(), calendar()) is None
+assert publishing.plan(OTHER, pid, calendar()) is None and publishing.schedule(OTHER, pid, calendar()) is None
+cannot(lambda: publishing.plan(ME, pid, calendar()), "Approve the clips you want to schedule first")
 for i in (1, 2, 3):
-    jobs.update_clip(pid, i, jobs.ClipEdit(review="approved"))
+    jobs.update_clip(ME, pid, i, jobs.ClipEdit(review="approved"))
 
 # the plan: clips in order, one per posting time, the earliest times first (checked against every half hour)
-planned = publishing.plan(pid, calendar())
+planned = publishing.plan(ME, pid, calendar())
 earliest = datetime.now(timezone.utc) + publishing.EARLIEST
 half_hours = (earliest.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=30 * k) for k in range(1, 1500))
 expected = [t for t in half_hours if t >= earliest and t.astimezone(tokyo).isoweekday() in (1, 3, 5)
@@ -514,30 +541,30 @@ assert [(p["clip_idx"], p["due_at"]) for p in planned["posts"]] == list(zip([1, 
 assert planned["left"] == [] and planned["posts"][0]["title"] == "Clip 1"
 later_start = date.today() + timedelta(days=10)
 assert all(p["due_at"].astimezone(tokyo).date() >= later_start
-           for p in publishing.plan(pid, calendar(start=later_start))["posts"])
+           for p in publishing.plan(ME, pid, calendar(start=later_start))["posts"])
 edge = (datetime.now(timezone.utc) + timedelta(days=29)).date()  # 12:00 UTC on this day fits; the next day's may not
-late = publishing.plan(pid, calendar(start=edge, days=list(range(1, 8)), times=["12:00"], timezone="UTC"))
+late = publishing.plan(ME, pid, calendar(start=edge, days=list(range(1, 8)), times=["12:00"], timezone="UTC"))
 assert 1 <= len(late["posts"]) <= 2 and [p["clip_idx"] for p in late["posts"]] + late["left"] == [1, 2, 3], late
 assert all(p["due_at"] <= datetime.now(timezone.utc) + publishing.AHEAD for p in late["posts"])
-cannot(lambda: publishing.plan(pid, calendar(start=date.today() + timedelta(days=31))), "within the next 30 days", 422)
+cannot(lambda: publishing.plan(ME, pid, calendar(start=date.today() + timedelta(days=31))), "within the next 30 days", 422)
 
 # scheduling queues a post per clip and channel without asking Buffer anything but the channel list
-cannot(lambda: publishing.schedule(pid, calendar(channels=["channel-tiktok", "channel-linkedin"])), "can't be used", 422)
+cannot(lambda: publishing.schedule(ME, pid, calendar(channels=["channel-tiktok", "channel-linkedin"])), "can't be used", 422)
 calls = buffer.calls
-queued = publishing.schedule(pid, calendar())
+queued = publishing.schedule(ME, pid, calendar())
 assert buffer.calls == calls + 2, "organizations + channels only"
 assert sorted((p["clip_idx"], p["service"], p["status"], p["due_at"]) for p in queued) == sorted(
     (p["clip_idx"], s, "queued", p["due_at"]) for p in planned["posts"] for s in ("tiktok", "youtube")), queued
 assert not any(p["buffer_post_id"] for p in queued)
-cannot(lambda: publishing.schedule(pid, calendar()), "Every approved clip is already scheduled or posted")
-cannot(lambda: publishing.publish(pid, 1, publishing.Publish(channels=["channel-tiktok"])), "already scheduled")
+cannot(lambda: publishing.schedule(ME, pid, calendar()), "Every approved clip is already scheduled or posted")
+cannot(lambda: publishing.publish(ME, pid, 1, publishing.Publish(channels=["channel-tiktok"])), "already scheduled")
 with db.connect() as c:
     c.execute("update publications set checked_at = now() - interval '2 minutes'")
 calls = buffer.calls
-assert len(publishing.publications(pid)["publications"]) == 6 and buffer.calls == calls, "queued posts aren't in Buffer"
-assert jobs.delete_project(pid) is None, "queued posts still have to go out"
+assert len(publishing.publications(ME, pid)["publications"]) == 6 and buffer.calls == calls, "queued posts aren't in Buffer"
+assert jobs.delete_project(ME, pid) is None, "queued posts still have to go out"
 unqueued = next(p for p in queued if p["clip_idx"] == 3 and p["service"] == "youtube")
-assert publishing.remove(unqueued["id"])["id"] == unqueued["id"] and buffer.calls == calls and post_row(unqueued) is None
+assert publishing.remove(ME, unqueued["id"])["id"] == unqueued["id"] and buffer.calls == calls and post_row(unqueued) is None
 
 # the worker: Buffer's limit puts the post back in the queue; then each queued post is created with its time
 buffer.fail = "rate_limited"
@@ -559,12 +586,12 @@ for p in queued:
 
 # the worker: Buffer refusing, Buffer never answering (the post may exist: not sent again), a time already gone;
 # a clip approved later goes after the posts TikTok already has, not on top of them (on X it could take the first time)
-jobs.update_clip(pid, 4, jobs.ClipEdit(review="approved"))
-assert publishing.plan(pid, calendar(channels=["channel-twitter"]))["posts"][0]["due_at"] == expected[0]
+jobs.update_clip(ME, pid, 4, jobs.ClipEdit(review="approved"))
+assert publishing.plan(ME, pid, calendar(channels=["channel-twitter"]))["posts"][0]["due_at"] == expected[0]
 
 
 def queue_clip4():
-    return publishing.schedule(pid, calendar(channels=["channel-tiktok"]))[0]
+    return publishing.schedule(ME, pid, calendar(channels=["channel-tiktok"]))[0]
 
 
 buffer.fail = "You've reached the limit of scheduled posts for this channel"
@@ -592,7 +619,7 @@ assert "before its time" in post_row(missed)["error"]
 assert publishing.send_queued() is False
 
 # the content package carries the calendar: every post, in time order
-package = zipfile.ZipFile(io.BytesIO(b"".join(jobs.content_package(pid))))
+package = zipfile.ZipFile(io.BytesIO(b"".join(jobs.content_package(ME, pid))))
 table = list(csv.DictReader(io.StringIO(package.read("calendar.csv").decode("utf-8-sig"))))
 assert list(table[0]) == ["due_at", "clip_idx", "title", "network", "channel_name", "status", "external_link", "error"]
 assert len(table) == 8 and {r["network"] for r in table} == {"tiktok", "youtube"}, table
@@ -602,13 +629,13 @@ assert [r["due_at"] for r in scheduled_rows] == sorted(r["due_at"] for r in sche
 # expired videos can't be scheduled; unscheduling everything leaves no public copies; then the project can go
 with db.connect() as c:
     c.execute("update projects set finished_at = now() - interval '31 days' where id = %s", (pid,))
-cannot(lambda: publishing.plan(pid, calendar()), "expired")
-in_buffer = {row["buffer_post_id"] for row in publishing.publications(pid)["publications"]} - {None}
-for row in publishing.publications(pid)["publications"]:
-    publishing.remove(row["id"])
+cannot(lambda: publishing.plan(ME, pid, calendar()), "expired")
+in_buffer = {row["buffer_post_id"] for row in publishing.publications(ME, pid)["publications"]} - {None}
+for row in publishing.publications(ME, pid)["publications"]:
+    publishing.remove(ME, row["id"])
 assert len(in_buffer) == 5 and not in_buffer & buffer.posts.keys()
 assert storage.client().list_objects_v2(Bucket="clips-public").get("KeyCount") == 0
-assert jobs.delete_project(pid)["id"] == pid
+assert jobs.delete_project(ME, pid)["id"] == pid
 
 s3.stop()
 print("ok")

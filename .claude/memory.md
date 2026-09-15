@@ -1,16 +1,20 @@
 # Build memory
 
-Last updated: 2026-09-15 (end of session 4: Phase 7 + real Buffer tests + Telegram/CLI scrapped). Update after every
-milestone: move items from "Left" to "Done" with how they were verified.
+Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI scrapped, pricing/capacity report,
+**accounts with Clerk**). Update after every milestone: move items from "Left" to "Done" with how they were verified.
 
 ## At a glance
 - **Built:** engine, jobs/worker, R2 storage, website (submit, review, ZIP, pricing/billing with payments off),
-  publishing through Buffer, content calendar. Channels: **website + MCP only** (Telegram bot and CLI scrapped).
-- **Pushed:** Phase 7 (calendar) and the Telegram/CLI removal, commit 39d434c on `main` (2026-09-15).
-- **Next:** Phase 8 MCP server → Phase 9 accounts (sign-in, MCP tokens, cost tracking, payments when asked) → Phase 10
-  deploy + hardening. Smaller: Buffer 10-scheduled-post cap handling, brand settings page, video titles, hook re-render.
+  publishing through Buffer, content calendar, **Clerk accounts (sign-in/up, protected pages, backend token checks,
+  every project/plan/post owned by a Clerk org or user)**. Channels: **website + MCP only**.
+- **Pushed:** everything, incl. Clerk accounts + Next 16.3.5 patch (2026-09-15, commit "Accounts with Clerk...").
+- **Next:** the user asked (then interrupted) for a **website redesign after a reference "Relink" SaaS landing page**
+  (modern premium SaaS; impeccable + design-taste-frontend; details in handover.md; not started, image to be re-sent;
+  it replaces the minimal/caption-yellow look and the "no gradients/card clutter" rule). Then Phase 8 MCP server with
+  Clerk OAuth → per-account publishing connection → Phase 9 cost tracking (+ payments when asked) → Phase 10 deploy +
+  hardening. Pricing proposal waiting on the user (see Done: pricing report).
 - **Not proven on real services:** a full project end to end on real R2 (Avast blocks it here), Instagram posting,
-  recovery from a real Buffer 429, a person using the site in a normal browser.
+  recovery from a real Buffer 429, a real person signing up through Clerk in a normal browser.
 
 ## Done
 
@@ -257,6 +261,59 @@ milestone: move items from "Left" to "Done" with how they were verified.
   transcripts); still in `.gitignore` so they can't be committed. Delete them when the user agrees.
 - Verified: `test_clipper.py` ok, `test_jobs.py` ok after the change.
 
+### Pricing and capacity report (2026-09-15)
+- Published privately: https://claude.ai/code/artifact/40731d89-cffa-4ab6-b520-a6dd461435ff (source HTML + scratch
+  `bench.py`/`costmodel.py` in the session scratchpad). Live competitor research (OpusClip $15/150 min, $29/300 min;
+  Vizard $29/600 min; quso $49/600; Klap $29/$79/$189 by clips; Choppity $32/5 h; Munch $49/200 min; 2short $19.90/15 h;
+  Descript, Riverside, Submagic). **OpusClip already runs an MCP server** (28 tools, OAuth).
+- Measured on our engine (Ryzen 3 5450U, 8 threads): H.264 1080p source → **3.3 CPU-s per clip-second** (0.48 wall-s),
+  ~0.7 GB RAM per render; AV1 source 5.6 CPU-s (face tracking decodes every frame). Audio prep 4.7 CPU-s per 25 min.
+  DeepSeek tokens per video-hour: flash 18.2k in / 0.8k out, v4-pro 6.7k in / 3.7k out (≈ $0.03 peak).
+- Unit cost ≈ **$0.107 per source video-hour** (STT $0.04, LLM $0.03, Railway compute $0.014, R2 $0.003, egress to R2
+  + one ZIP $0.02); plan with $0.16. YouTube via residential proxy adds $0.20–5.00/h depending on download approach.
+- Proposed (not decided): Free 60 min (watermark, sign-in) · Starter $12/6 h · Creator $24/20 h (incl. MCP) · Agency
+  $59/60 h; no clip caps; annual = 2 months free; extra hours $1.50. Margins ~78–83% at full use, ~88% at 40% use.
+  Alternative: $29 for 30 h. Current `billing.py` plans unchanged until the user decides.
+- Capacity: 1 h video ≈ 8 min on 8 vCPU; ~11 video-hours/hour per replica (2 jobs). Launch blockers found: Groq free
+  plan (8 video-hours/day total), one Buffer account for everyone (Buffer free: 10 scheduled/channel, 3,000 API
+  requests/month), no sign-in (now done), YouTube blocks cloud IPs, ZIP streamed through the API (Railway 5-min request
+  limit per its forum), r2.dev public bucket; later: FIFO queue fairness, DB pool + transcript retention, Railway egress
+  ($0.05/GB) at ~10k users. Clerk: free to 50,000 MRUs; Pro $25/mo.
+
+### Accounts with Clerk (2026-09-15, pushed)
+- User decision: Clerk for everything around accounts (see CLAUDE.md). Clerk CLI 3.3 installed globally (npm), logged in
+  with the user's Clerk account, `clerk init --app app_3JMJIEqTu79eUjLFgFDsRzpNa7h -y --no-skills` in
+  `apps/website` (development instance "Clipper ai"; production not configured). `clerk doctor`: all green.
+- npm audit during init: **Next 16.3.2 critical RCE advisories** → upgraded to **16.3.5** (exact), 0 vulnerabilities.
+- Website: `proxy.ts` (`clerkMiddleware`; public `/`, `/pricing`, `/sign-in(.*)`, `/sign-up(.*)`, `/api(.*)`; others
+  `auth.protect()`; matcher + `/__clerk/:path*`), `layout.tsx` (`ClerkProvider` in body with ink/inherit/radius
+  variables; nav: signed-out Pricing + Sign in + Sign up (btn-primary), signed-in Projects/Publishing/Pricing/Billing +
+  `UserButton`), sign-in/up pages, `/api` proxy: `await auth()` → 401 "Sign in to continue." else forwards `Bearer
+  await getToken()` (no more BACKEND_API_KEY). Scripts bind **localhost** (see gotchas). `.env.example` updated.
+- Backend: `migrations/006_owners.sql` (`projects.owner`, `subscriptions.owner`, one active plan per owner);
+  `api.signed_in` = `clerk_backend_api.security.authenticate_request(accepts_token=["session_token"],
+  authorized_parties=CLERK_AUTHORIZED_PARTIES or 127.0.0.1/localhost:3000)` → owner `org_id or sub`; every route takes
+  `Owner`; `API_KEY` removed. `billing.*`, `jobs.*`, `publishing.*` take `owner` first and filter by it (update_clip
+  via subquery, remove via join, worker uses `project["owner"]`, `send_queued` reads the clip row directly).
+  `publishing.allowed(owner)`: `BUFFER_OWNERS` (Clerk ids, comma-separated, `*` = anyone; `dev.py --fake-buffer` sets
+  `*`) gates `channels`/`ready` because the workspace Buffer key posts to one person's socials. `requirements.txt` +
+  `clerk-backend-api>=7,<8`. Backend `.env`: `CLERK_SECRET_KEY` copied from a temp `clerk env pull` file without
+  printing; `SSL_CERT_FILE` (this PC).
+- Tests/tools: `test_jobs.py` uses owners ME/OTHER with isolation checks (other account: no plan, can't get/list/edit/
+  package/cancel/delete my project, can't see/remove my posts or plan/schedule my project, usage separate, BUFFER_OWNERS
+  refusal). Mutation check: turning the owner filter in `get_project` into `or` fails the test. `check.mjs` = signed-out
+  checks (API 401 on 6 routes, CSRF 403, `/` `/pricing` `/sign-in` `/sign-up` 200, 7 private pages 307 → /sign-in).
+  `dev_fixture.py` creates/reuses Clerk test user `walkthrough+clerk_test@example.com` (username `walkthrough_test`),
+  owns the project, prints a one-hour sign-in ticket; `walkthrough.mjs` step 0 checks the signed-out wall then signs in
+  via `/sign-in?__clerk_ticket=...`, API assertions run in-page (session cookie), signed-in 404/422 checks moved here.
+- Verified: `test_jobs.py` ok, `test_clipper.py` ok, `next build` ok, `clerk doctor` ok, `check.mjs` ok, backend curl
+  without/with bogus token → 401, **`walkthrough.mjs` passed end to end signed in** (every flow incl. billing per user,
+  batch links/uploads, review, ZIP, publishing via fake Buffer, calendar, cancel plan). Screenshots: Clerk sign-in card
+  matches (ink button, system font), signed-in header with UserButton, 390 px dark OK. Dev DB cleaned (test user's 6
+  projects, 2 posts, 2 plans deleted; the 4 old projects have no owner so nobody sees them).
+- **Not verified:** a real person signing up (email code, Google/Apple) in a normal browser; Clerk Organizations
+  switching (owner = org_id path untested with a real org); Clerk components in dark mode (card stays light).
+
 ### Repo (2026-09-14)
 - Pushed to https://github.com/HasbiyallahuJafaru/ClipperAi (public, `main`, first commit 402473e) with README,
   `.env.example`, description and topics. Layout: `apps/backend`, `apps/website` (empty), `apps/mcp` (empty).
@@ -310,9 +367,14 @@ milestone: move items from "Left" to "Done" with how they were verified.
 - [ ] **Real payments** (only when the user asks): provider with hosted checkout + webhooks (no card data on our
       servers) → start checkout in `billing.subscribe`, activate from webhook, billing period instead of calendar
       month, cancel at period end, invoices from the provider. Confirm Pro/Business prices with the user.
-- [ ] Account area for MCP: create/rotate MCP tokens.
-- [ ] Needs from backend: user accounts/auth (replace shared API_KEY; then the website proxy must check the signed-in
-      user instead of injecting one key). Until then the website must not be deployed publicly.
+- [x] Accounts: Clerk sign-in/up, protected pages, backend verifies Clerk session tokens, per-owner data (2026-09-15).
+- [ ] **User:** sign up as the first real user at http://localhost:3000 (Clerk's guide: then click "Configure your
+      application" if it appears; explore Organizations/Components/Dashboard). Then put that Clerk user id in
+      `BUFFER_OWNERS` for real publishing (`clerk users list` shows it) and, if wanted, give the 4 old ownerless projects
+      that owner.
+- [ ] Clerk components in dark mode (card stays light); Clerk production instance + domain at deploy.
+- [ ] **Per-account publishing connection** (each account its own Buffer key or a multi-customer posting API) before
+      anyone else can sign up for real; until then `BUFFER_OWNERS`.
 
 ### Phase 6 — Publishing (Buffer): remaining
 - [x] First real post (private YouTube test via script), see Done. Buffer channels now: YouTube "The Micro-Fix",
@@ -340,19 +402,19 @@ milestone: move items from "Left" to "Done" with how they were verified.
 - [ ] Maybe: one calendar across all projects (today it's per project; busy times are already checked across projects),
       per-slot channel choice (spec example shows different networks per day), "Unschedule all".
 
-### Phase 8 — MCP (`apps/mcp` or inside backend — decide here)
-- [ ] Official `mcp` Python SDK, Streamable HTTP at `/mcp`, authenticated with per-user tokens issued on the website;
-      high-level tools calling the existing services with the same limits as the website: repurpose_video →
-      `jobs.create_project` (link; uploads need a signed upload link), get_project_status / list_projects → `jobs`,
-      generate_content_package → package link, create_content_calendar → `publishing.plan`, schedule_content →
-      `publishing.schedule`.
-- [ ] Decide with the user: where it lives (default: mounted in the FastAPI backend) and what it authenticates with
-      until accounts exist (only the shared `API_KEY` today; MCP must never be anonymous).
+### Phase 8 — MCP (next; default: mounted inside the FastAPI backend)
+- [ ] Official `mcp` Python SDK, Streamable HTTP at `/mcp`, **authenticated with Clerk OAuth** (Claude/ChatGPT sign in
+      with their ClipperAi account; verify with `authenticate_request(accepts_token=["oauth_token"])`, owner from the
+      token; protected-resource metadata pointing at Clerk; check Clerk dynamic client registration for MCP clients).
+      High-level tools calling the existing owner-scoped services with the same limits as the website: repurpose_video
+      → `jobs.create_project` (link; uploads need a signed upload link), get_project_status / list_projects → `jobs`,
+      generate_content_package → package link (the ZIP streams through the API today), create_content_calendar →
+      `publishing.plan`, schedule_content → `publishing.schedule`.
 
 ### Phase 9 — Billing & usage
-- [x] Plans + monthly limits for one workspace, enforced in backend services (2026-09-14, see Done).
-- [ ] Users/workspaces (give `subscriptions` and `projects` an owner; proxy checks the signed-in user), per-job cost
-      tracking (§33: STT seconds, LLM tokens from `usage`, render seconds, storage bytes, publishing ops), overage.
+- [x] Plans + monthly limits, enforced in backend services (2026-09-14); per owner since Clerk (2026-09-15).
+- [ ] Per-job cost tracking (§33: STT seconds, LLM tokens from `usage`, render seconds, storage bytes, publishing ops),
+      overage. Decide the new price list with the user (pricing report proposal: $12/6 h, $24/20 h, $59/60 h, free 60 min).
 - [ ] When payments go live: subscription state from the provider's webhooks (see Phase 5 "Real payments").
 
 ### Phase 10 — Hardening + deploy
@@ -367,9 +429,10 @@ milestone: move items from "Left" to "Done" with how they were verified.
 - Thumbnail = frame at 1 s; can miss the speaker when a clip opens on B-roll.
 - A worker stalled > 2 min without crashing can cause a job to run twice (add a claim token if seen).
 - One DB connection per call (add psycopg_pool when latency shows it); fixed worker concurrency.
-- Source URL DNS checked once (rebinding); shared API key.
-- Website proxy injects the one backend key for anyone who can reach the site (bound to 127.0.0.1 until accounts).
-- Publishing: one Buffer key for the workspace; YouTube category fixed to 22; public copies of posts nobody re-checks
+- Source URL DNS checked once (rebinding).
+- Accounts: an upload's random id is the only link to its uploader (≤1 day); `BUFFER_OWNERS` gates the one Buffer key;
+  the 4 pre-Clerk dev projects have no owner.
+- Publishing: one Buffer key for the deployment (`BUFFER_OWNERS`); YouTube category fixed to 22; public copies of posts nobody re-checks
   stay until the 45-day rule; if Buffer marks a post error and the user retries inside Buffer, the copy is already
   gone (retry from ClipperAi instead); if Buffer creates a post
   but the reply times out, the row says error and a retry can post twice; a crash between inserting a publication and
@@ -377,7 +440,7 @@ milestone: move items from "Left" to "Done" with how they were verified.
 - Calendar: every clip goes to the same channels at the same time; clips in clip order (not score); a `sending` calendar
   row with no Buffer id after a worker crash stays until removed through the API; the worker waits 60 s after any
   error (one global backoff, not Buffer's Retry-After); an approved clip un-approved after scheduling still goes out.
-- Billing: one workspace; calendar-month usage; running projects don't reserve allowance (a month can overshoot by one
+- Billing: per owner (org or user); calendar-month usage; running projects don't reserve allowance (a month can overshoot by one
   video); minutes = speech length of completed projects; ZIP bytes flow through the API server.
 - STT fallback when needed: onnx-asr + Parakeet v3 on CPU (~$0.01/audio-hr, European languages only).
 
@@ -451,6 +514,21 @@ milestone: move items from "Left" to "Done" with how they were verified.
   refused / connect timeout → `URLError`. `publishing.call` keeps it as `PublishError.__cause__`.
 - Walkthrough race: after a clip action the re-rendered button can still be `disabled` (busy until the request's
   `finally`); wait for `!b.disabled` before clicking.
+- **Next 16 `proxy.ts` + `next start -H 127.0.0.1` = every request hangs** ("Failed to proxy http://localhost:3000/...
+  socket hang up"): Next forwards proxied requests to `localhost`, which resolves to `::1` here. Bind `-H localhost`
+  (listens on ::1 only) and use http://localhost:3000; without `-H` it works but listens on the whole network.
+- **The Next server itself needs `NODE_EXTRA_CA_CERTS` behind Avast**, not just npm: otherwise Clerk's handshake fetch
+  fails (`UNABLE_TO_VERIFY_LEAF_SIGNATURE`, "Refreshing the session token resulted in an infinite redirect loop") and
+  a browser that Clerk JS shows as signed in stays signed out on the server (header shows Sign in, /dashboard loops).
+- **Clerk's Python SDK (httpx) hangs silently behind Avast** (no error, timeout_ms ignored) → `SSL_CERT_FILE=<bundle>`
+  in backend `.env`; the backend's token verification needs it too (JWKS fetch).
+- Clerk development instances answer browser-style page requests (`Accept: text/html`, `Sec-Fetch-Dest: document`)
+  with a 307 to `<app>.clerk.accounts.dev/v1/client/handshake`; plain requests show the real rules (public 200,
+  protected 307 → /sign-in). `clerk init` leaves every route public, omits the `/__clerk/:path*` matcher and breaks
+  the layout's indentation. This Clerk app requires a username (`users.create` → `form_data_missing username`).
+  `authenticate_request` accepts any token type by default (set `accepts_token`); v2 session tokens carry the org as
+  `o.id`, the SDK copies it to `org_id`. Sign-in tickets: `sign_in_tokens.create` → open
+  `/sign-in?__clerk_ticket=<token>` (signed in after ~10 s here). `<SignIn/>` loads from Clerk's CDN (several seconds).
 - Next.js 16 ships its docs in `apps/website/node_modules/next/dist/docs/` (route handlers take
   `RouteContext<"/api/[...path]">`, params are Promises, `middleware` is now `proxy`).
 

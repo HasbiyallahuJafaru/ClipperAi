@@ -6,5 +6,6 @@ fastapi
 uvicorn
 psycopg[binary]
 boto3
+clerk-backend-api>=7,<8  # verifies Clerk session tokens (accounts)
 tzdata  # time zones for the content calendar where the OS has none (Windows, slim Linux images)
 # local dev/tests only: pgserver (Postgres without installing it), moto[server] (fake S3 for test_jobs.py)

@@ -99,10 +99,21 @@ def call(query: str, **variables) -> dict:
     return body["data"]
 
 
-def channels() -> list[dict]:
+def allowed(owner: str):
+    """BUFFER_API_KEY posts to one person's social accounts, so only the owners listed in BUFFER_OWNERS (Clerk ids,
+    comma-separated; `*` = everyone, for the fake Buffer in dev.py) may publish through it."""
+    # ponytail: one Buffer account for the whole deployment; give each account its own publishing connection before
+    # anyone else signs up
+    listed = os.environ.get("BUFFER_OWNERS", "")
+    if listed != "*" and owner not in listed.split(","):
+        raise PublishError("Publishing isn't connected for your account yet.")
+
+
+def channels(owner: str) -> list[dict]:
     """The social accounts connected in Buffer. `usable`: ClipperAi can post clips there (a network we write copy
     for, connected, not locked by Buffer's plan, and not a personal Instagram profile: Buffer only sends those a
     reminder to post by hand)."""
+    allowed(owner)
     found = []
     for organization in call("{ account { organizations { id } } }")["account"]["organizations"]:
         found += call("""query($id: OrganizationId!) { channels(input: {organizationId: $id}) {
@@ -112,12 +123,13 @@ def channels() -> list[dict]:
                  and not (c["service"] == "instagram" and c["type"] == "profile")} for c in found]
 
 
-def ready(channel_ids: list[str]) -> list[dict]:
+def ready(owner: str, channel_ids: list[str]) -> list[dict]:
     """The chosen channels, once it's certain publishing is set up and every one of them can take clips."""
+    allowed(owner)
     if not (os.environ.get("S3_PUBLIC_BUCKET") and os.environ.get("S3_PUBLIC_URL")):
         raise PublishError("Publishing isn't set up yet: Buffer needs a public bucket for videos. Set S3_PUBLIC_BUCKET"
                            " and S3_PUBLIC_URL in the backend's .env.")
-    by_id = {c["id"]: c for c in channels()}
+    by_id = {c["id"]: c for c in channels(owner)}
     chosen = [by_id.get(i) for i in dict.fromkeys(channel_ids)]
     if not all(c and c["usable"] for c in chosen):
         raise PublishError("One of those channels can't be used any more. Reload the page and choose again.", 422)
@@ -166,10 +178,10 @@ def save(publication_id: UUID, post: dict | None = None, error: str | None = Non
     return row
 
 
-def publish(project_id: UUID, idx: int, request: Publish) -> list[dict] | None:
+def publish(owner: str, project_id: UUID, idx: int, request: Publish) -> list[dict] | None:
     """Sends an approved clip to Buffer channels, now or at `due_at`. Returns one publication per channel, including
     any Buffer refused (status "error" with its reason). None if the clip doesn't exist."""
-    project = jobs.get_project(project_id)
+    project = jobs.get_project(owner, project_id)
     clip = next((c for c in (project or {}).get("clips", []) if c["idx"] == idx), None)
     if clip is None:
         return None
@@ -181,7 +193,7 @@ def publish(project_id: UUID, idx: int, request: Publish) -> list[dict] | None:
         raise PublishError("That time has already passed. Pick a time in the future.", 422)
     if request.due_at and request.due_at > schedule_until(project):
         raise PublishError(f"Posts can be scheduled up to {AHEAD.days} days ahead. Pick an earlier time.", 422)
-    chosen = ready(request.channels)
+    chosen = ready(owner, request.channels)
     with db.connect() as c:
         taken = [r["channel_name"] for r in c.execute("""
             select channel_name from publications where project_id = %s and clip_idx = %s and channel_id = any(%s)
@@ -223,11 +235,11 @@ def slots(request: Calendar, earliest: datetime, until: datetime):
         day += timedelta(days=1)
 
 
-def plan(project_id: UUID, request: Calendar) -> dict | None:
+def plan(owner: str, project_id: UUID, request: Calendar) -> dict | None:
     """The calendar before anything is sent: approved clips that aren't scheduled or posted yet, in clip order, one per
     posting time up to 30 days ahead, skipping times the chosen channels already have a post at (from any project).
     `left`: the clips that didn't fit. None if the project doesn't exist."""
-    project = jobs.get_project(project_id)
+    project = jobs.get_project(owner, project_id)
     if project is None:
         return None
     until = schedule_until(project)
@@ -252,13 +264,13 @@ def plan(project_id: UUID, request: Calendar) -> dict | None:
             "left": [clip["idx"] for clip in clips[len(due):]]}
 
 
-def schedule(project_id: UUID, request: Calendar) -> list[dict] | None:
+def schedule(owner: str, project_id: UUID, request: Calendar) -> list[dict] | None:
     """Puts the plan on the calendar: one queued post per clip and channel, which the worker hands to Buffer within
     moments (send_queued). Returns the queued posts; None if the project doesn't exist."""
-    planned = plan(project_id, request)
+    planned = plan(owner, project_id, request)
     if planned is None:
         return None
-    chosen = ready(request.channels)
+    chosen = ready(owner, request.channels)
     queued = []
     with db.connect() as c, c.transaction():
         for post in planned["posts"]:
@@ -287,7 +299,9 @@ def send_queued() -> bool:
         save(row["id"], error="This post couldn't be handed to Buffer before its time. Schedule it again.")
         return True
     # ponytail: sent even if the clip was un-approved after scheduling; check clip["review"] here if that happens
-    clip = next(c for c in jobs.get_project(row["project_id"])["clips"] if c["idx"] == row["clip_idx"])
+    with db.connect() as c:
+        clip = c.execute("select * from clips where project_id = %s and idx = %s",
+                         (row["project_id"], row["clip_idx"])).fetchone()
     try:
         video_url = storage.public_copy(f"projects/{row['project_id']}/clip{row['clip_idx']:02}.mp4",
                                         video_name(row["id"]))
@@ -306,11 +320,11 @@ def send_queued() -> bool:
     return True
 
 
-def publications(project_id: UUID) -> dict | None:
+def publications(owner: str, project_id: UUID) -> dict | None:
     """The project's posts, newest state first checked with Buffer for posts whose time has come (at most once a
     minute each; last known state if Buffer can't be reached). None if the project doesn't exist."""
     with db.connect() as c:
-        project = c.execute("select * from projects where id = %s", (project_id,)).fetchone()
+        project = c.execute("select * from projects where id = %s and owner = %s", (project_id, owner)).fetchone()
         due = c.execute("""select * from publications where project_id = %s and status not in ('sent', 'error')
                                and buffer_post_id is not null and coalesce(due_at, created_at) <= now()
                                and checked_at < now() - interval '1 minute'""", (project_id,)).fetchall()
@@ -334,10 +348,11 @@ def publications(project_id: UUID) -> dict | None:
     return {"publications": rows, "schedule_until": schedule_until(jobs.present(project))}
 
 
-def remove(publication_id: UUID) -> dict | None:
+def remove(owner: str, publication_id: UUID) -> dict | None:
     """Unschedules a post (deletes it from Buffer) or clears a failed attempt. None if missing."""
     with db.connect() as c:
-        row = c.execute("select * from publications where id = %s", (publication_id,)).fetchone()
+        row = c.execute("""select p.* from publications p join projects j on j.id = p.project_id
+                           where p.id = %s and j.owner = %s""", (publication_id, owner)).fetchone()
     if row is None:
         return None
     if row["status"] == "queued":  # not in Buffer yet, unless the worker takes it this very moment

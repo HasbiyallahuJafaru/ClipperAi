@@ -25,9 +25,9 @@ if __name__ == "__main__":
     fake_buffer = "--fake-buffer" in sys.argv[1:]
     if fake_buffer:
         import fake_buffer as fake  # noqa: E402
-        os.environ["BUFFER_API_KEY"] = fake.KEY
+        os.environ |= {"BUFFER_API_KEY": fake.KEY, "BUFFER_OWNERS": "*"}  # a pretend account anyone may post to
     clipper.load_env()
-    if missing := [k for k in ("GROQ_API_KEY", "DEEPSEEK_API_KEY", "API_KEY") if not os.environ.get(k)]:
+    if missing := [k for k in ("GROQ_API_KEY", "DEEPSEEK_API_KEY", "CLERK_SECRET_KEY") if not os.environ.get(k)]:
         sys.exit(f"missing {', '.join(missing)} in {clipper.HERE / '.env'}")
 
     ThreadedMotoServer(ip_address="127.0.0.1", port=9000, verbose=False).start()

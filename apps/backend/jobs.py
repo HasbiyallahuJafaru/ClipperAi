@@ -1,5 +1,6 @@
 """Projects: one source video processed into clips. The service functions here are shared by the REST API and the
-MCP server; `python jobs.py` runs the Postgres-backed worker that does the processing.
+MCP server; `python jobs.py` runs the Postgres-backed worker that does the processing. `owner` is the Clerk
+organization or user id a request acts for: nothing here reads or changes another owner's projects.
 
 usage: python jobs.py [--concurrency N]   (default: WORKER_CONCURRENCY or 1)
 """
@@ -126,6 +127,8 @@ def present(project: dict, clips: list[dict] | None = None) -> dict:
 
 def create_upload(request: NewUpload) -> dict:
     """Step 1 of uploading: the client PUTs the file straight to storage, then creates a project with `source`."""
+    # ponytail: the random upload id is the only thing tying an upload to its uploader (it's only ever sent to them and
+    # the file is gone within a day); key uploads by owner if ids could leak
     upload_id = uuid4()
     return {"source": f"upload:{upload_id}", "method": "PUT", "expires_in": 3600,
             "upload_url": storage.upload_url(f"uploads/{upload_id}", request.content_type),
@@ -137,67 +140,69 @@ def discard_upload(source: str):
         storage.delete_prefix(f"uploads/{upload[1]}")
 
 
-def create_project(request: NewProject) -> dict:
+def create_project(owner: str, request: NewProject) -> dict:
     """Queues a project. Raises billing.LimitError if the plan doesn't allow another one this month."""
-    billing.check_new_project()
+    billing.check_new_project(owner)
     options = {"n": request.clips, "min_len": request.min_seconds, "max_len": request.max_seconds}
     with db.connect() as c:
-        return present(c.execute("insert into projects (source, options) values (%s, %s) returning *",
-                                 (request.source, Jsonb(options))).fetchone())
+        return present(c.execute("insert into projects (owner, source, options) values (%s, %s, %s) returning *",
+                                 (owner, request.source, Jsonb(options))).fetchone())
 
 
-def get_project(project_id: UUID) -> dict | None:
+def get_project(owner: str, project_id: UUID) -> dict | None:
     with db.connect() as c:
-        project = c.execute("select * from projects where id = %s", (project_id,)).fetchone()
-        clips = c.execute("select * from clips where project_id = %s order by idx", (project_id,)).fetchall()
+        project = c.execute("select * from projects where id = %s and owner = %s", (project_id, owner)).fetchone()
+        clips = project and c.execute("select * from clips where project_id = %s order by idx", (project_id,)).fetchall()
     return project and present(project, clips)
 
 
-def list_projects(limit: int = 50) -> list[dict]:
+def list_projects(owner: str, limit: int = 50) -> list[dict]:
     with db.connect() as c:
         return [present(p) for p in c.execute("""
             select p.*, (select count(*) from clips where project_id = p.id) as clip_count
-            from projects p order by created_at desc limit %s""", (limit,))]
+            from projects p where owner = %s order by created_at desc limit %s""", (owner, limit))]
 
 
-def cancel_project(project_id: UUID) -> dict | None:
+def cancel_project(owner: str, project_id: UUID) -> dict | None:
     """Queued projects cancel at once; running ones stop at their next step. None if missing or already finished."""
     with db.connect() as c:
         project = c.execute("""
             update projects set cancel_requested = true, updated_at = now(),
                 status = case when status = 'queued' then 'cancelled' else status end,
                 finished_at = case when status = 'queued' then now() end
-            where id = %s and status not in ('completed', 'failed', 'cancelled') returning *""",
-                            (project_id,)).fetchone()
+            where id = %s and owner = %s and status not in ('completed', 'failed', 'cancelled') returning *""",
+                            (project_id, owner)).fetchone()
     if project and project["status"] == "cancelled":
         discard_upload(project["source"])
     return project and present(project)
 
 
-def delete_project(project_id: UUID) -> dict | None:
+def delete_project(owner: str, project_id: UUID) -> dict | None:
     """Deletes a project with its clips and files. None if missing, still being processed (cancel it first) or with
     posts waiting to go out (they'd still go out, with no way left to follow or unschedule them: unschedule first)."""
     with db.connect() as c:
-        project = c.execute("""delete from projects where id = %s and status <> all(%s) and not exists (
+        project = c.execute("""delete from projects where id = %s and owner = %s and status <> all(%s) and not exists (
                                    select 1 from publications where project_id = projects.id
                                        and status not in ('sent', 'error'))
-                               returning *""", (project_id, RUNNING)).fetchone()
+                               returning *""", (project_id, owner, RUNNING)).fetchone()
     if project:  # row first: if storage fails now, the bucket lifecycle rules still remove the files
         storage.delete_prefix(f"projects/{project_id}/")
         discard_upload(project["source"])
     return project
 
 
-def update_clip(project_id: UUID, idx: int, edit: ClipEdit) -> dict | None:
+def update_clip(owner: str, project_id: UUID, idx: int, edit: ClipEdit) -> dict | None:
     """Approve/reject a clip and/or replace its copy. Returns the clip row (no file links), None if missing."""
     with db.connect() as c:
         return c.execute("""
             update clips set review = coalesce(%s, review), title = coalesce(%s, title),
                 description = coalesce(%s, description), hashtags = coalesce(%s, hashtags), posts = coalesce(%s, posts)
-            where project_id = %s and idx = %s returning *""",
+            where project_id = %s and idx = %s and project_id in (select id from projects where owner = %s)
+            returning *""",
                          (edit.review, edit.title, edit.description,
                           None if edit.hashtags is None else Jsonb(edit.hashtags),
-                          None if edit.posts is None else Jsonb(edit.posts.model_dump()), project_id, idx)).fetchone()
+                          None if edit.posts is None else Jsonb(edit.posts.model_dump()), project_id, idx,
+                          owner)).fetchone()
 
 
 class _Pipe(io.RawIOBase):
@@ -218,14 +223,14 @@ class _Pipe(io.RawIOBase):
         return taken
 
 
-def content_package(project_id: UUID) -> Iterator[bytes] | None:
+def content_package(owner: str, project_id: UUID) -> Iterator[bytes] | None:
     """A ZIP of every clip that wasn't rejected: videos/, captions/, thumbnails/ and metadata/clips.csv + clips.json
     with the current (edited) copy, plus calendar.csv once anything is scheduled or posted, streamed straight from
     storage. None if there's nothing to package: the project
     is missing, unfinished or expired, or every clip was rejected."""
     # ponytail: the bytes flow through the API server; build the ZIP in the worker and hand out a link if bandwidth
     # or open connections become a problem
-    project = get_project(project_id)
+    project = get_project(owner, project_id)
     clips = [clip for clip in (project or {}).get("clips", []) if clip["review"] != "rejected"]
     if not clips or "video_url" not in clips[0]:
         return None
@@ -322,7 +327,7 @@ def run_job(project: dict):
     threading.Thread(target=heartbeat, daemon=True).start()
     options, source, final = project["options"], project["source"], True
     try:
-        left = billing.allowance()  # checked again here: the plan may have changed or run out since it was queued
+        left = billing.allowance(project["owner"])  # checked again: the plan may have changed or run out since queued
         if upload := UPLOAD.fullmatch(source):
             source = str(temp / "upload")
             storage.get(f"uploads/{upload[1]}", temp / "upload")

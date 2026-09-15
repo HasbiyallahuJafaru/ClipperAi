@@ -1,9 +1,9 @@
-// Clicks through the website in headless Edge like a person would (DevTools protocol, no extra packages): no plan ->
-// refused, pricing -> checkout -> plan, switch plan, batch links, batch uploads, review, copy, Download all, publish
-// and schedule, content calendar, cancel.
+// Clicks through the website in headless Edge like a person would (DevTools protocol, no extra packages): signed out
+// -> sign-in wall, sign in, no plan -> refused, pricing -> checkout -> plan, switch plan, batch links, batch uploads,
+// review, copy, Download all, publish and schedule, content calendar, cancel.
 // Needs `python dev.py --fake-buffer` + `npm run start` running and fixture data (changes the dev database):
-//   cd apps/backend && python dev_fixture.py      -> prints <project id> <media folder>
-//   cd apps/website && node walkthrough.mjs <project id> <media folder>
+//   cd apps/backend && python dev_fixture.py      -> prints <project id> <media folder> <sign-in ticket>
+//   cd apps/website && node walkthrough.mjs <project id> <media folder> <sign-in ticket>
 // Screenshots go to <temp>/clipperai-walkthrough. Windows + Edge (the path below); Chrome takes the same flags.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -11,14 +11,14 @@ import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SITE = "http://127.0.0.1:3000";
-const [PROJECT, MEDIA] = process.argv.slice(2);
-assert.ok(PROJECT && MEDIA, "usage: node walkthrough.mjs <project id> <media folder> (from python dev_fixture.py)");
+const SITE = "http://localhost:3000"; // next binds localhost: with proxy.ts it forwards requests to localhost internally
+const [PROJECT, MEDIA, TICKET] = process.argv.slice(2);
+assert.ok(PROJECT && MEDIA && TICKET, "usage: node walkthrough.mjs <project id> <media folder> <ticket> (from python dev_fixture.py)");
 const DIR = join(tmpdir(), "clipperai-walkthrough") + "/";
 mkdirSync(DIR, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const api = async (path) =>
-  (await fetch(SITE + "/api/" + path, { headers: { "Sec-Fetch-Site": "same-origin" } })).json();
+// through the signed-in page, so requests carry the Clerk session like the site's own
+const api = (path) => js(`fetch(${JSON.stringify("/api/" + path)}).then((r) => r.json())`);
 
 rmSync(`${DIR}edge-cdp`, { recursive: true, force: true });
 const edge = spawn("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", [
@@ -92,6 +92,35 @@ try {
   await send("Page.enable");
   await send("Runtime.enable");
   await send("DOM.enable");
+
+  // 0. signed out: the header offers Sign in / Sign up, private pages send you to sign in, the API says so; then sign in
+  await go("/");
+  await until(`[...document.querySelectorAll("button")].some((b) => b.textContent === "Sign up")`, "Sign up button", 30000);
+  assert.ok(!(await js("document.body.innerText")).includes("Projects"), "app links are hidden when signed out");
+  await shot("cdp-signed-out", 1440);
+  await send("Page.navigate", { url: SITE + "/dashboard" });
+  await until(`location.pathname.startsWith("/sign-in")`, "redirect to sign-in", 30000);
+  assert.deepEqual(await js(`fetch("/api/projects").then(async (r) => [r.status, (await r.json()).detail])`),
+                   [401, "Sign in to continue."]);
+  await has("Welcome back", 30000); // Clerk's form loads from Clerk's servers
+  await shot("cdp-sign-in", 1440);
+  await send("Page.navigate", { url: `${SITE}/sign-in?__clerk_ticket=${TICKET}&redirect_url=${encodeURIComponent(SITE + "/dashboard")}` });
+  await until(`location.pathname === "/dashboard" && !!document.querySelector(".cl-userButtonTrigger")`, "signed in on Projects", 60000);
+  ok("signed out: Sign in/Sign up shown, /dashboard redirects to sign-in, API 401; ticket sign-in lands on Projects");
+
+  // signed in, the backend answers as before: missing things 404, bad input 422 before anything is paid for
+  const status = (method, path, body) => js(`fetch(${JSON.stringify("/api/" + path)}, { method: ${JSON.stringify(method)},
+    body: ${JSON.stringify(body ?? null)} }).then((r) => r.status)`);
+  const missing = "00000000-0000-4000-8000-000000000000";
+  assert.equal(await status("GET", `projects/${missing}`), 404);
+  assert.equal(await status("POST", "projects", '{"source": "http://localhost/video.mp4"}'), 422);
+  assert.equal(await status("POST", "billing/subscribe", '{"plan": "free"}'), 422);
+  assert.equal(await status("POST", `projects/${missing}/clips/1/publish`, '{"channels": ["a"]}'), 404);
+  assert.equal(await status("POST", `projects/${missing}/calendar/plan`,
+    '{"channels": ["a"], "days": [1], "times": ["09:00"], "start": "2026-09-21", "timezone": "Mars/Olympus"}'), 422);
+  assert.equal(await status("DELETE", `publications/${missing}`), 404);
+  assert.deepEqual((await api("billing")).plans.map((p) => p.price_cents), [1500, 3900, 9900]);
+  ok("signed-in API: 404 for missing project/clip/post, 422 for a local source, unknown plan and time zone");
 
   // 1. no plan yet
   await go("/settings/billing");
