@@ -6,7 +6,7 @@ milestone: move items from "Left" to "Done" with how they were verified.
 ## At a glance
 - **Built:** engine, jobs/worker, R2 storage, website (submit, review, ZIP, pricing/billing with payments off),
   publishing through Buffer, content calendar. Channels: **website + MCP only** (Telegram bot and CLI scrapped).
-- **Uncommitted:** Phase 7 (calendar) and the Telegram/CLI removal. Last push: Phase 6 (f3c2e51). Commit when asked.
+- **Pushed:** Phase 7 (calendar) and the Telegram/CLI removal, commit 39d434c on `main` (2026-09-15).
 - **Next:** Phase 8 MCP server → Phase 9 accounts (sign-in, MCP tokens, cost tracking, payments when asked) → Phase 10
   deploy + hardening. Smaller: Buffer 10-scheduled-post cap handling, brand settings page, video titles, hook re-render.
 - **Not proven on real services:** a full project end to end on real R2 (Avast blocks it here), Instagram posting,
@@ -187,7 +187,7 @@ milestone: move items from "Left" to "Done" with how they were verified.
 - **Not verified:** Instagram posting for real (needs a creator/business account), TikTok/Facebook/X/LinkedIn on real
   channels (Facebook reels on Pages/Groups); real 429 headers; r2.dev rate limits under load.
 
-### Phase 7 — Content calendar (2026-09-15, not committed yet)
+### Phase 7 — Content calendar (2026-09-15, pushed in 39d434c)
 - Design (ponytail): no new table, no migration. A calendar post is a `publications` row with `status = 'queued'`
   (no Buffer id) that the worker hands to Buffer; the calendar view is the project's publications grouped by day.
 - `publishing.py`: `Calendar` (channels, days 1–7 ISO, times ≤6, start date, IANA `timezone` validated with
@@ -278,7 +278,7 @@ milestone: move items from "Left" to "Done" with how they were verified.
       (scratch script): server upload + HEAD size, 24 h signed GET (Content-Disposition attachment, video/mp4), 7-day
       signed GET, streamed read, CORS preflight 204 `*`, signed PUT + worker download, wrong content type → 403,
       delete_prefix, bucket empty after. `test_jobs.py` ok after the rule change.
-- [ ] **Commit + push** Phase 7 (calendar) and the Telegram/CLI removal (when the user asks).
+- [x] Committed + pushed Phase 7 and the Telegram/CLI removal (39d434c, 2026-09-15, user asked).
 - [ ] **Rotate the R2 token**: the user pasted its values into the chat. Create a new one (ideally "Apply to specific
       buckets only: clipperai, clipperai-published"), put it in `.env`, delete the old one in Cloudflare.
 - [ ] User: delete the 3 Phase 6 test videos on "The Micro-Fix" (public NbWBjHIFG2M, VHLmTNy7Ex8; private uVqdDp9WFvc).

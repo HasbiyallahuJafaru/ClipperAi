@@ -1,8 +1,8 @@
 # Handover: Phase 7 done, next is Phase 8 (MCP)
 
 Updated 2026-09-15 at the end of build session 4. **Phase 7 (content calendar) is built and tested, including against
-real Buffer. The Telegram bot and command-line tool were scrapped. None of this session's work is committed yet**:
-commit and push only when the user asks. Start the next chat with:
+real Buffer. The Telegram bot and command-line tool were scrapped. Pushed to `main` as 39d434c.**
+Commit and push only when the user asks. Start the next chat with:
 
 > Read `handover.md`, `.claude/CLAUDE.md` and `.claude/memory.md`, then start Phase 8 (MCP) using the ponytail skill.
 
@@ -20,7 +20,7 @@ This file = where we stopped and what to do first.
 | Phase 5: website (`apps/website`) | Done, works locally: batch submit, live progress, clip review, Download all (ZIP), cancel / delete |
 | Billing (early part of Phase 9) | Plans Creator $15 / Pro $39 / Business $99 with monthly limits. **Payments switched off (user decision).** One workspace, no sign-in |
 | Phase 6: publishing (Buffer) | Done and working for real: post now, scheduled and unscheduled posts reached YouTube "The Micro-Fix" |
-| Phase 7: content calendar | **Done, uncommitted.** Local tests + walkthrough pass; against real Buffer: one post scheduled/unscheduled through the page, and a 30-post batch (worker fine, Buffer's plan cap refused 20) |
+| Phase 7: content calendar | **Done, pushed (39d434c).** Local tests + walkthrough pass; against real Buffer: one post scheduled/unscheduled through the page, and a 30-post batch (worker fine, Buffer's plan cap refused 20) |
 | Phase 8: MCP | **Next** |
 | Phase 9: accounts, cost tracking, real payments · Phase 10: deploy + hardening | Not started |
 
@@ -29,9 +29,9 @@ tool are scrapped: the CLI is removed from `clipper.py` (`run()` now requires `p
 `save_transcript`, `work_root`), Telegram was only ever a plan. The REST API is the website's backend, not a channel.
 
 GitHub: https://github.com/HasbiyallahuJafaru/ClipperAi (**public**), branch `main` (no branches: commit straight to
-`main`, only when the user asks). Last pushed commit: Phase 6 (f3c2e51).
+`main`, only when the user asks). Last pushed commit: Phase 7 (39d434c).
 
-### What this session added (uncommitted)
+### What this session added
 - **Content calendar:** on a project's **Calendar** page (or "Schedule all" on the project page) the user picks
   channels, posting days, times and a start date. **Preview** shows which approved clip goes out when; **Schedule**
   queues one post per clip and channel and answers at once; the worker hands queued posts to Buffer one at a time
@@ -112,7 +112,6 @@ bucket is empty (all test data from this session was removed).
 
 ## Open items waiting on the user
 
-- **Commit + push** Phase 7 and the Telegram/CLI removal.
 - **Buffer's 10-scheduled-post cap:** upgrade Buffer, or have the calendar handle the cap (small change).
 - **MCP decisions** (see "What's left" 1): where it lives, and how it authenticates before accounts exist.
 - **Rotate the R2 token** (its values were pasted into the chat); scope the new one to `clipperai` and
