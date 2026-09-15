@@ -22,7 +22,8 @@ with socket.socket() as s:
 s3 = ThreadedMotoServer(ip_address="127.0.0.1", port=port, verbose=False)
 s3.start()
 os.environ |= {"DATABASE_URL": database.get_uri(), "S3_ENDPOINT": f"http://127.0.0.1:{port}", "S3_BUCKET": "clips",
-               "S3_ACCESS_KEY_ID": "test", "S3_SECRET_ACCESS_KEY": "test"}
+               "S3_ACCESS_KEY_ID": "test", "S3_SECRET_ACCESS_KEY": "test", "S3_PUBLIC_BUCKET": "clips-public",
+               "S3_PUBLIC_URL": f"http://127.0.0.1:{port}/clips-public"}  # moto serves objects without signatures
 
 import billing  # noqa: E402  (after the env points at the test services)
 import clipper  # noqa: E402
@@ -48,11 +49,17 @@ def rejects(make, why):
 db.migrate()
 db.migrate()  # second run is a no-op
 import boto3  # noqa: E402  (moto rejects region "auto" on bucket creation only; R2 buckets exist already)
-boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT"], region_name="us-east-1", aws_access_key_id="test",
-             aws_secret_access_key="test").create_bucket(Bucket="clips")
+for name in ("clips", "clips-public"):
+    boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT"], region_name="us-east-1", aws_access_key_id="test",
+                 aws_secret_access_key="test").create_bucket(Bucket=name)
+storage.client().put_bucket_policy(Bucket="clips-public", Policy=json.dumps({"Statement": [  # R2: public access switch
+    {"Effect": "Allow", "Principal": "*", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::clips-public/*"}]}))
 storage.setup()
 rules = storage.client().get_bucket_lifecycle_configuration(Bucket="clips")["Rules"]
-assert {r["ID"]: r["Expiration"]["Days"] for r in rules} == {"uploads": 1, "projects": 30}
+assert {r["ID"]: r.get("Expiration", {}).get("Days") for r in rules} == {"uploads": 1, "projects": 30,
+                                                                         "unfinished-uploads": None}
+rules = storage.client().get_bucket_lifecycle_configuration(Bucket="clips-public")["Rules"]
+assert [(r["ID"], r["Expiration"]["Days"]) for r in rules] == [("published", 45)]
 
 for bad in ["C:/Windows/win.ini", "file:///etc/passwd", "http://localhost:8000/v.mp4", "http://10.0.0.5/v.mp4",
             "http://169.254.169.254/latest/meta-data", "https://no-such-host.invalid/v", "upload:not-a-uuid"]:
@@ -287,6 +294,182 @@ with db.connect() as c:
 refuses(billing.allowance, "made clips past the plan", "all 150 clips")
 assert billing.cancel()["status"] == "ended" and billing.current() is None and billing.cancel() is None
 refuses(billing.allowance, "processed without a plan", "Choose a plan")
+
+# publishing through a fake Buffer (same answers and refusals as the real one)
+import fake_buffer  # noqa: E402
+import publishing  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from psycopg.types.json import Jsonb  # noqa: E402
+
+buffer = fake_buffer.FakeBuffer()
+publishing.API = buffer.url
+now = datetime.now(timezone.utc)
+with db.connect() as c:
+    pid = c.execute("insert into projects (source, options, status, finished_at) values"
+                    " ('https://example.com/v', '{}', 'completed', now()) returning id").fetchone()["id"]
+    for i in (1, 2):
+        c.execute("""insert into clips (project_id, idx, start_s, end_s, score, reason, hook, title, description,
+                                        hashtags, posts) values (%s, %s, 0, 30, 90, 'r', 'h', %s, 'd', '[]', %s)""",
+                  (pid, i, "A very long title " * 10, Jsonb({k: f"{k} post" for k in clipper.Posts.model_fields})))
+        storage.client().put_object(Bucket="clips", Key=f"projects/{pid}/clip{i:02}.mp4", Body=f"clip {i}".encode())
+
+
+def cannot(make, words, status=None):
+    try:
+        make()
+    except publishing.PublishError as e:
+        assert words in str(e) and status in (None, e.status), (str(e), e.status)
+        return e
+    raise AssertionError(f"expected a refusal mentioning {words!r}")
+
+
+def publish(idx, channels, due_at=None):
+    return publishing.publish(pid, idx, publishing.Publish(channels=channels, due_at=due_at))
+
+
+def rows():
+    return {(r["clip_idx"], r["service"]): r for r in publishing.publications(pid)["publications"]}
+
+
+def public_copy(publication):
+    """The post's copy in the public bucket, or None once it's gone."""
+    try:
+        return http("GET", f"{os.environ['S3_PUBLIC_URL']}/{publication['id']}.mp4")
+    except urllib.error.HTTPError:
+        return None
+
+
+# connecting: no key, a wrong key (what an OAuth failure looks like with keys), then the right one
+os.environ.pop("BUFFER_API_KEY", None)
+cannot(publishing.channels, "BUFFER_API_KEY")
+os.environ["BUFFER_API_KEY"] = "wrong"
+cannot(publishing.channels, "didn't accept the API key", 502)
+os.environ["BUFFER_API_KEY"] = fake_buffer.KEY
+usable = {c["id"].removeprefix("channel-"): c["usable"] for c in publishing.channels()}
+assert usable == {"tiktok": True, "youtube": True, "instagram": True, "twitter": True, "linkedin": False,
+                  "pinterest": False, "instagram-personal": False}, usable
+# linkedin is disconnected; Pinterest isn't a network we write for; Buffer won't post to personal Instagram profiles
+
+# only approved clips, only usable channels, only times Buffer can still fetch the video at
+calls = buffer.calls
+cannot(lambda: publish(1, ["channel-tiktok"]), "Approve this clip")
+jobs.update_clip(pid, 1, jobs.ClipEdit(review="approved"))
+jobs.update_clip(pid, 2, jobs.ClipEdit(review="approved"))
+assert publish(99, ["channel-tiktok"]) is None
+cannot(lambda: publish(1, ["channel-tiktok"], now - timedelta(minutes=5)), "already passed", 422)
+cannot(lambda: publish(1, ["channel-tiktok"], now + timedelta(days=30, hours=1)), "up to 30 days ahead", 422)
+public_url = os.environ.pop("S3_PUBLIC_URL")
+cannot(lambda: publish(1, ["channel-tiktok"]), "needs a public bucket")
+os.environ["S3_PUBLIC_URL"] = public_url
+assert buffer.calls == calls, "refusals that don't need Buffer mustn't use its request limit"
+cannot(lambda: publish(1, ["channel-linkedin"]), "can't be used", 422)
+cannot(lambda: publish(1, ["channel-instagram-personal"]), "can't be used", 422)
+cannot(lambda: publish(1, ["no-such-channel"]), "can't be used", 422)
+
+# post now to three networks: each gets its own copy and the input its network requires
+sent = publish(1, ["channel-tiktok", "channel-youtube", "channel-instagram"])
+assert [p["status"] for p in sent] == ["sending"] * 3 and all(p["buffer_post_id"] for p in sent), sent
+inputs = {buffer.inputs[p["buffer_post_id"]]["channelId"]: buffer.inputs[p["buffer_post_id"]] for p in sent}
+tiktok, youtube, instagram = inputs["channel-tiktok"], inputs["channel-youtube"], inputs["channel-instagram"]
+assert tiktok["text"] == "tiktok post" and tiktok["mode"] == "shareNow" and youtube["text"] == "youtube post"
+assert tiktok["assets"][0]["video"]["metadata"] == {"thumbnailOffset": 1000} and "metadata" not in youtube["assets"][0]["video"]
+assert len(youtube["metadata"]["youtube"]["title"]) == 100 and youtube["metadata"]["youtube"]["categoryId"] == "22"
+assert instagram["metadata"]["instagram"]["type"] == "reel"
+assert tiktok["assets"][0]["video"]["url"] == f"{public_url}/{sent[0]['id']}.mp4", "a plain public link, not signed"
+assert all(public_copy(p) == b"clip 1" for p in sent), "each post has its own public copy of the clip"
+cannot(lambda: publish(1, ["channel-tiktok"]), "already scheduled or posted on Clipperdemo")
+
+# scheduled post: Buffer gets the time; nothing is asked about it before then
+due = now + timedelta(days=2)
+scheduled = publish(2, ["channel-twitter"], due)[0]
+assert scheduled["status"] == "scheduled" and scheduled["due_at"] == due
+assert buffer.inputs[scheduled["buffer_post_id"]] | {"assets": None} == {
+    "channelId": "channel-twitter", "text": "x post", "assets": None, "schedulingType": "automatic",
+    "needsApproval": False, "mode": "customScheduled", "dueAt": due.isoformat()}
+
+# status: re-checked with Buffer only once a post's time has come, and at most once a minute
+calls = buffer.calls
+assert rows()[(1, "tiktok")]["status"] == "sending" and buffer.calls == calls, "checked less than a minute ago"
+with db.connect() as c:
+    c.execute("update publications set checked_at = now() - interval '2 minutes'")
+buffer.posts[sent[2]["buffer_post_id"]]["status"] = "error"  # Instagram fails when Buffer sends it
+buffer.posts[sent[2]["buffer_post_id"]]["error"] = {"message": "Instagram rejected the video"}
+now_rows = rows()
+assert now_rows[(1, "tiktok")]["status"] == "sent" and now_rows[(1, "tiktok")]["external_link"]
+assert now_rows[(1, "instagram")]["status"] == "error" and now_rows[(1, "instagram")]["error"] == "Instagram rejected the video"
+assert now_rows[(2, "twitter")]["status"] == "scheduled" and buffer.calls == calls + 3, "the future post wasn't asked about"
+assert public_copy(now_rows[(1, "tiktok")]) is None and public_copy(now_rows[(1, "instagram")]) is None
+assert public_copy(now_rows[(2, "twitter")]) == b"clip 2", "copies go once a post is sent or failed, not before"
+assert publishing.publications(uuid4()) is None
+assert publishing.publications(pid)["schedule_until"] <= datetime.now(timezone.utc) + publishing.AHEAD
+
+# a failed post doesn't block trying again; Buffer refusing a post is recorded with its reason
+buffer.fail = "You've reached the limit of scheduled posts for this channel"
+refused = publish(1, ["channel-instagram"])[0]
+assert refused["status"] == "error" and "limit of scheduled posts" in refused["error"] and public_copy(refused) is None
+buffer.fail = None
+assert publish(1, ["channel-instagram"])[0]["status"] == "sending"
+
+# Buffer reads the video again when it sends: a copy that's gone by then makes the post fail
+early = publish(2, ["channel-youtube"])[0]
+storage.delete_public(f"{early['id']}.mp4")
+with db.connect() as c:
+    c.execute("update publications set checked_at = now() - interval '2 minutes' where id = %s", (early["id"],))
+assert rows()[(2, "youtube")]["error"] == "Video could not be read from its URL."
+publishing.remove(early["id"])
+
+# rate limit, a key revoked later ("expired token"), Buffer down, Buffer unreachable: readable, nothing half-done
+buffer.fail = "rate_limited"
+cannot(lambda: publish(2, ["channel-tiktok"]), "Try again in 13 minutes", 502)
+assert (2, "tiktok") not in rows(), "refused at the channel lookup: nothing sent, nothing recorded"
+listed, publishing.channels = publishing.channels, lambda: listed_channels  # limit hit between lookup and posting
+buffer.fail = None
+listed_channels = listed()
+buffer.fail = "rate_limited"
+cannot(lambda: publish(2, ["channel-tiktok", "channel-youtube"]), "Try again in 13 minutes", 502)
+publishing.channels = listed
+with db.connect() as c:
+    c.execute("update publications set checked_at = now() - interval '2 minutes'")
+now_rows = rows()  # status checks hit the limit too, and the page still loads with what's known
+assert now_rows[(2, "tiktok")]["status"] == "error" and "request limit" in now_rows[(2, "tiktok")]["error"]
+assert public_copy(now_rows[(2, "tiktok")]) is None
+assert (2, "youtube") not in now_rows, "stops at the first channel: the rest would hit the same limit"
+buffer.fail = "unauthorized"
+cannot(publishing.channels, "create a new one in Buffer", 502)
+buffer.fail = "down"
+cannot(publishing.channels, "Buffer had a problem (503)", 502)
+buffer.fail = None
+publishing.API = "http://127.0.0.1:9"
+cannot(publishing.channels, "Couldn't reach Buffer", 502)
+publishing.API = buffer.url
+
+# unschedule, clear failures, refuse posts that went out; posts deleted inside Buffer disappear here too;
+# a project can't be deleted while a post still has to fetch its video
+assert jobs.delete_project(pid) is None
+cannot(lambda: publishing.remove(rows()[(1, "tiktok")]["id"]), "already gone out")
+assert publishing.remove(scheduled["id"])["id"] == scheduled["id"] and scheduled["buffer_post_id"] not in buffer.posts
+assert public_copy(scheduled) is None, "unscheduling removes the public copy"
+for row in publishing.publications(pid)["publications"]:
+    if row["status"] == "error":
+        assert publishing.remove(row["id"])
+assert publishing.remove(scheduled["id"]) is None
+later = publish(2, ["channel-twitter"], now + timedelta(days=1))[0]
+del buffer.posts[later["buffer_post_id"]]
+with db.connect() as c:
+    c.execute("update publications set due_at = now() - interval '1 hour', checked_at = now() - interval '2 minutes'"
+              " where id = %s", (later["id"],))
+assert (2, "twitter") not in rows() and public_copy(later) is None
+assert {s for _, s in rows()} == {"tiktok", "youtube", "instagram"} and all(r["status"] == "sent" for r in rows().values())
+assert storage.client().list_objects_v2(Bucket="clips-public").get("KeyCount") == 0, "no public copies left behind"
+
+# expired clips can't be published
+with db.connect() as c:
+    c.execute("update projects set finished_at = now() - interval '31 days' where id = %s", (pid,))
+cannot(lambda: publish(2, ["channel-youtube"]), "expired")
+assert jobs.delete_project(pid)["id"] == pid, "only sent posts left"
+with db.connect() as c:
+    assert c.execute("select count(*) from publications").fetchone()["count"] == 0
 
 s3.stop()
 print("ok")

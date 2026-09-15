@@ -17,8 +17,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-dvh antialiased">
         <header className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
           <Link href="/" className="font-display text-lg tracking-tight">ClipperAi</Link>
-          <nav className="flex gap-5 text-sm">
+          <nav className="flex gap-4 text-sm sm:gap-5">
             <Link href="/dashboard" className="link">Projects</Link>
+            <Link href="/settings/integrations" className="link">Publishing</Link>
             <Link href="/pricing" className="link">Pricing</Link>
             <Link href="/settings/billing" className="link">Billing</Link>
           </nav>

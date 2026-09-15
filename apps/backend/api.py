@@ -3,7 +3,8 @@ Every route needs `Authorization: Bearer <API_KEY>` (API_KEY in .env). Processin
 
 Upload flow: POST /api/uploads -> PUT the file to upload_url -> POST /api/projects {"source": "upload:<id>"}.
 Files are served as signed storage links on each clip (video_url, captions_url, thumbnail_url).
-Plan limits answer 402 with a message people can read."""
+Publishing: GET /api/publishing/channels -> POST .../clips/{idx}/publish {"channels": [...], "due_at": optional}.
+Plan limits answer 402 and publishing problems 409/422/502, with a message people can read."""
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ import billing
 import clipper
 import db
 import jobs
+import publishing
 
 clipper.load_env()
 REQUIRED = ("API_KEY", "S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_BUCKET")
@@ -42,6 +44,11 @@ app = FastAPI(title="ClipperAI", lifespan=lifespan, dependencies=[Depends(requir
 @app.exception_handler(billing.LimitError)
 def limit_reached(_, error: billing.LimitError):
     return JSONResponse({"detail": str(error)}, status_code=402)
+
+
+@app.exception_handler(publishing.PublishError)
+def cannot_publish(_, error: publishing.PublishError):
+    return JSONResponse({"detail": str(error)}, status_code=error.status)
 
 
 def found(project: dict | None) -> dict:
@@ -82,8 +89,9 @@ def cancel_project(project_id: UUID):
 @app.delete("/api/projects/{project_id}", status_code=204)
 def delete_project(project_id: UUID):
     if not jobs.delete_project(project_id):
-        found(jobs.get_project(project_id))
-        raise HTTPException(409, "project is still processing: cancel it first")
+        if found(jobs.get_project(project_id))["status"] in jobs.RUNNING:
+            raise HTTPException(409, "project is still processing: cancel it first")
+        raise HTTPException(409, "some of this project's posts haven't gone out yet: unschedule them first")
 
 
 @app.patch("/api/projects/{project_id}/clips/{idx}")
@@ -101,6 +109,29 @@ def download_package(project_id: UUID):
                                  " or every clip was rejected")
     return StreamingResponse(package, media_type="application/zip",
                              headers={"Content-Disposition": 'attachment; filename="content-package.zip"'})
+
+
+@app.get("/api/publishing/channels")
+def publishing_channels():
+    return publishing.channels()
+
+
+@app.post("/api/projects/{project_id}/clips/{idx}/publish", status_code=201)
+def publish_clip(project_id: UUID, idx: int, request: publishing.Publish):
+    if (published := publishing.publish(project_id, idx, request)) is None:
+        raise HTTPException(404, "clip not found")
+    return published
+
+
+@app.get("/api/projects/{project_id}/publications")
+def list_publications(project_id: UUID):
+    return found(publishing.publications(project_id))
+
+
+@app.delete("/api/publications/{publication_id}", status_code=204)
+def remove_publication(publication_id: UUID):
+    if publishing.remove(publication_id) is None:
+        raise HTTPException(404, "post not found")
 
 
 @app.get("/api/billing")

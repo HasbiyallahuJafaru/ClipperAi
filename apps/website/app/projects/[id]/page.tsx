@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
-import { api, day, isFinal, plural, sourceLabel, STEPS, usePoll, when, type Clip, type Project } from "../../lib";
+import { api, day, isFinal, plural, sourceLabel, STEPS, usePoll, when, type Clip, type Project, type Publications } from "../../lib";
 import { ClipReview } from "./clip";
+import { useChannels, waiting } from "./publish";
 
 export default function ProjectPage() {
   const { id } = useParams<{ id: string }>();
@@ -134,6 +135,9 @@ function Results({ project, onClip }: { project: Project; onClip: (clip: Clip) =
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const live = !!project.files_expire_at && new Date(project.files_expire_at) > new Date();
+  // the backend checks with Buffer at most once a minute per post, so polling faster than this gains nothing
+  const posts = usePoll<Publications>(`projects/${project.id}/publications`, (d) => d.publications.some(waiting), 20000);
+  const channels = useChannels();
 
   async function approveAll() {
     setBusy(true);
@@ -175,7 +179,9 @@ function Results({ project, onClip }: { project: Project; onClip: (clip: Clip) =
       <ol className="divide-y divide-line">
         {clips.map((clip) => (
           <li key={clip.idx}>
-            <ClipReview projectId={project.id} clip={clip} onChange={onClip} />
+            <ClipReview projectId={project.id} clip={clip} onChange={onClip} channels={channels}
+                        posts={posts.data?.publications.filter((p) => p.clip_idx === clip.idx) ?? []}
+                        until={posts.data?.schedule_until ?? null} onPosts={posts.reload} />
           </li>
         ))}
       </ol>

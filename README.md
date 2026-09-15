@@ -12,9 +12,10 @@ and write the copy; FFmpeg, OpenCV and libass do the cutting, cropping and capti
 (caption text always comes from the real transcript) and costs low.
 
 > **Status:** the backend engine, job system and storage layer are built and tested. The website works locally:
-> submit one or many videos, follow progress, review clips, download everything as a ZIP, and choose a plan (pricing,
-> checkout, billing, usage limits; payments are switched off, so plans are free for now). Accounts, publishing, the
-> MCP server and the Telegram bot are next. See [Status and roadmap](#status-and-roadmap).
+> submit one or many videos, follow progress, review clips, download everything as a ZIP, publish or schedule approved
+> clips through Buffer, and choose a plan (pricing, checkout, billing, usage limits; payments are switched off, so plans
+> are free for now). The content calendar, accounts, the MCP server and the Telegram bot are next. See
+> [Status and roadmap](#status-and-roadmap).
 
 ---
 
@@ -83,7 +84,7 @@ One account, one subscription and one usage balance, reachable three ways:
 
 | Channel | What it's for | Status |
 |---|---|---|
-| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Works locally: submit (batch), review, ZIP download, pricing/checkout/billing with payments switched off |
+| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Works locally: submit (batch), review, ZIP download, publish/schedule through Buffer, pricing/checkout/billing with payments switched off |
 | **MCP server** | Use ClipperAi from AI assistants, e.g. *"take my latest podcast and make 15 clips"*. | Planned (Phase 8) |
 | **Telegram bot** | Send a video link to a bot and get clips and post copy back. Linked to your website account. | Planned |
 
@@ -106,8 +107,9 @@ flowchart TB
     W -->|server-side proxy| API
     M -. planned .-> API
     T -. planned .-> API
-    API[REST API<br/>api.py] --> S[Services<br/>jobs.py · billing.py]
-    S --> PG[(Postgres<br/>projects · clips · transcripts · subscriptions)]
+    API[REST API<br/>api.py] --> S[Services<br/>jobs.py · billing.py · publishing.py]
+    S --> PG[(Postgres<br/>projects · clips · transcripts · subscriptions · publications)]
+    S --> BUF[Buffer<br/>posts to social networks]
     WK[Worker<br/>jobs.py] --> PG
     WK --> ENG[Engine<br/>clipper.py]
     CLI --> ENG
@@ -122,9 +124,9 @@ flowchart TB
   queue.
 - **Requests never wait for video work.** Creating a project returns immediately with an id; a separate worker process
   does the processing; clients check the status.
-- **Business logic lives in the services**: `jobs.py` (projects, review, content package) and `billing.py` (plans and
-  usage limits). The API, the worker and the future MCP server and Telegram bot all call the same functions, so limits
-  are identical everywhere. The website never talks to the backend directly from the browser: its own server forwards
+- **Business logic lives in the services**: `jobs.py` (projects, review, content package), `billing.py` (plans and
+  usage limits) and `publishing.py` (sending approved clips to Buffer). The API, the worker and the future MCP server
+  and Telegram bot all call the same functions, so limits are identical everywhere. The website never talks to the backend directly from the browser: its own server forwards
   `/api/*` requests and adds the key.
 - **Providers are swappable by configuration.** Groq and DeepSeek are both reached through the OpenAI-compatible SDK;
   R2 is reached through the standard S3 API, so any S3-compatible store works.
@@ -145,20 +147,23 @@ ClipperAi/
     │   ├── clipper.py      the engine + command-line tool
     │   ├── jobs.py         project services + background worker
     │   ├── billing.py      plans, the subscription, monthly usage limits
+    │   ├── publishing.py   publish and schedule approved clips through Buffer
     │   ├── api.py          REST API (FastAPI)
     │   ├── storage.py      Cloudflare R2 / S3: uploads, signed links, bucket setup
-    │   ├── dev.py          run API + worker + fake S3 locally in one command
+    │   ├── dev.py          run API + worker + fake S3 (and optionally a fake Buffer) locally in one command
+    │   ├── fake_buffer.py  stand-in for Buffer's API, for tests and local development
     │   ├── db.py           Postgres connection + migration runner
     │   ├── migrations/     plain SQL migrations, applied in order
     │   ├── fonts/          Montserrat ExtraBold for captions (SIL OFL)
     │   ├── models/         YuNet face detection model (MIT)
     │   ├── test_clipper.py engine tests
-    │   ├── test_jobs.py    job queue, storage and billing tests
+    │   ├── test_jobs.py    job queue, storage, billing and publishing tests
     │   ├── dev_fixture.py  test data for the website walkthrough (local dev database only)
     │   ├── requirements.txt
     │   └── .env.example    configuration template
     ├── website/            Next.js website (Phase 5)
-    │   ├── app/            pages: / (new project), /dashboard, /projects/[id], /pricing, /checkout, /settings/billing
+    │   ├── app/            pages: / (new project), /dashboard, /projects/[id], /pricing, /checkout, /settings/billing,
+    │   │                   /settings/integrations
     │   ├── app/api/        server-side proxy that adds the backend key (the browser never sees it)
     │   ├── check.mjs       proxy checks against a running site
     │   ├── walkthrough.mjs clicks through every flow in headless Edge
@@ -218,8 +223,14 @@ The website has its own install step; see [Running the website](#running-the-web
    python storage.py setup
    ```
 
-   This tells R2 to delete uploads after 1 day and clips after 30 days, and allows browsers to upload and play files
-   through signed links.
+   This tells R2 to delete uploads after 1 day, clips after 30 days and unfinished multi-part uploads after 1 day
+   (replacing R2's default rule for those), and allows browsers to upload and play files through signed links.
+
+5. **For publishing** (optional): create a second bucket (for example `clipperai-published`) and switch on public
+   access in its settings (the `r2.dev` subdomain to start, your own domain before launch). Put its name and public
+   address in `S3_PUBLIC_BUCKET` and `S3_PUBLIC_URL`, then run `python storage.py setup` again: copies left there are
+   deleted after 45 days. Buffer can't read signed links, so each post gets its own copy of the clip in this bucket,
+   deleted as soon as the post has gone out.
 
 ---
 
@@ -238,7 +249,9 @@ All settings live in `apps/backend/.env` (copy of [`.env.example`](apps/backend/
 | `S3_ACCESS_KEY_ID` | API, worker | R2 API token access key. |
 | `S3_SECRET_ACCESS_KEY` | API, worker | R2 API token secret. |
 | `S3_BUCKET` | API, worker | Bucket name. |
-| `BUFFER_API_KEY` | — | Reserved for publishing (Phase 6); not used yet. |
+| `S3_PUBLIC_BUCKET` | API | Publishing only: the public bucket that holds copies of clips being posted. |
+| `S3_PUBLIC_URL` | API | Publishing only: that bucket's public address, e.g. `https://pub-<id>.r2.dev` or `https://media.example.com`. |
+| `BUFFER_API_KEY` | API | Buffer API key for publishing (Buffer → Settings → API). Your social accounts are connected inside Buffer; ClipperAi posts to them through this key. Optional: without it everything else works and the Publishing page says Buffer isn't connected. |
 
 The CLI only needs the Groq and DeepSeek keys; it doesn't use the database or R2.
 
@@ -283,6 +296,10 @@ Starts everything in one process: the API on `http://127.0.0.1:8000`, one worker
 in-memory S3 server (moto) on port 9000 in place of R2. Only the Groq, DeepSeek and `API_KEY` settings are needed.
 Stored clips disappear when you stop it. Needs `pip install pgserver "moto[server]"`.
 
+`python dev.py --fake-buffer` also swaps Buffer for an in-memory stand-in with six demo channels, so publishing can be
+tried without a Buffer account. (Real Buffer can't fetch videos from the fake S3 on your machine anyway: a real
+publish needs R2.)
+
 ### API server and worker (with real R2)
 
 Run these in two terminals:
@@ -314,7 +331,8 @@ npm run dev                    # http://127.0.0.1:3000  (or: npm run build && np
 | `/` | Paste video links (one per line for several) or upload files (several at once, drag and drop works), with optional clip count and length. Each video becomes its own project and starts right away. |
 | `/dashboard` | All projects, newest first, with live status. |
 | `/projects/new` | The same form as the home page. |
-| `/projects/{id}` | Live progress while processing (you can leave and come back), then every clip with a video preview, hook, title, description, per-platform posts with copy buttons, downloads, and **Approve / Reject / Edit**, plus **Approve all** and **Download all** (a ZIP of every clip that isn't rejected). Cancel or delete the project from here. |
+| `/projects/{id}` | Live progress while processing (you can leave and come back), then every clip with a video preview, hook, title, description, per-platform posts with copy buttons, downloads, and **Approve / Reject / Edit**, plus **Approve all** and **Download all** (a ZIP of every clip that isn't rejected). Approved clips get **Publish**: choose Buffer channels and post now or at a time, then follow each post (posting, scheduled, posted with a link, or why it failed) and unschedule. Cancel or delete the project from here. |
+| `/settings/integrations` | Publishing: whether Buffer is connected, and which channels can take clips (and why others can't). |
 | `/pricing` | The three plans and their monthly limits. |
 | `/checkout?plan=pro` | Order summary ($0.00 due while payments are switched off) and **Start plan**. |
 | `/settings/billing` | Current plan, this month's usage against its limits, change or cancel the plan, billing history. |
@@ -347,11 +365,17 @@ variable: `export API_KEY=...`.
 | `GET` | `/api/billing` | Plans, the current plan, this month's usage and billing history | `200` |
 | `POST` | `/api/billing/subscribe` | Start or switch plan: `{"plan": "creator" \| "pro" \| "business"}` | `201` |
 | `POST` | `/api/billing/cancel` | End the current plan | `200` |
+| `GET` | `/api/publishing/channels` | The social accounts connected in Buffer, and whether each can take clips | `200` |
+| `POST` | `/api/projects/{id}/clips/{idx}/publish` | Post an approved clip to Buffer channels, now or at a time | `201` |
+| `GET` | `/api/projects/{id}/publications` | The project's posts and their current state | `200` |
+| `DELETE` | `/api/publications/{id}` | Unschedule a post, or clear a failed one | `204` |
 
 Errors: `401` bad or missing key · `402` no plan, or this month's allowance is used up (the message says which) ·
-`404` unknown project or clip · `409` cancelling a finished project, deleting one that's still processing (cancel it
-first), packaging one with nothing to download, or cancelling when there's no plan · `422` invalid input (the response
-explains what's wrong).
+`404` unknown project, clip or post · `409` cancelling a finished project, deleting one that's still processing (cancel
+it first) or that has posts still waiting to go out (unschedule them first), packaging one with nothing to download,
+cancelling when there's no plan, publishing a clip that isn't approved, has expired or is already on that channel, or
+Buffer not connected · `422` invalid input (the response explains what's wrong) · `502` Buffer refused the key, hit its
+request limit or couldn't be reached (the message says which and what to do).
 
 ### Process a video from a link
 
@@ -449,6 +473,40 @@ project is requested (`402`), and again by the worker before anything is paid fo
 or a plan that ran out while it was queued, fails with the reason in `detail`, and the clip count is capped to what's
 left. Plans live in `apps/backend/billing.py`.
 
+### Publishing
+
+Clips are published through [Buffer](https://buffer.com). Connect your social accounts in Buffer, create an API key
+there (Settings → API) and set it as `BUFFER_API_KEY`. ClipperAi never asks for social passwords.
+
+```bash
+curl http://127.0.0.1:8000/api/publishing/channels -H "Authorization: Bearer $API_KEY"
+# -> [{"id": "...", "service": "tiktok", "name": "yourhandle", "displayName": "Your Name",
+#      "isDisconnected": false, "isLocked": false, "usable": true}, ...]
+
+curl -X POST http://127.0.0.1:8000/api/projects/<id>/clips/1/publish \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"channels": ["<channel id>", "<channel id>"], "due_at": "2026-09-20T15:00:00Z"}'
+# -> one publication per channel: {"id": "...", "service": "tiktok", "status": "scheduled", "due_at": ..., "error": null}
+```
+
+- **Only approved clips** whose files haven't expired can be published. Omit `due_at` to post straight away.
+- **Each network gets its own post** (`twitter` channels get the X post), with what the network requires: YouTube
+  (posted as a Short) uses the clip title (up to 100 characters) and the "People & Blogs" category, Instagram and
+  Facebook post it as a reel, and TikTok and Instagram use the frame at 1 second as the cover. Channels on other
+  networks (Pinterest, Threads, ...) aren't offered yet, and neither are **personal Instagram profiles**: Buffer only
+  sends those a reminder to post by hand, so switch the account to a creator or business account (free, in
+  Instagram's settings) and reconnect it in Buffer.
+- **Posts can be scheduled up to 30 days ahead.** Buffer reads the video when the post is created and again when it
+  goes out, and it can't read signed links, so each post gets its own copy of the clip in the public bucket, under a
+  random name. The copy is deleted once the post has been sent, has failed or is unscheduled (the bucket's 45-day rule
+  catches any left over). The clip must still have its files when you publish.
+- **Status.** `status` follows Buffer: `sending`, `scheduled`, `sent` (with `external_link`), `error` (with the
+  reason in `error`). When you fetch `/publications`, posts whose time has come are checked with Buffer (at most once a
+  minute each, to stay within Buffer's limit of 100 requests per 15 minutes).
+- **One post per clip per channel.** Posting the same clip to the same channel again is refused until the earlier post
+  is unscheduled or has failed. If Buffer refuses one channel (say, its queue is full) the others still go out, and the
+  refused one is recorded with Buffer's reason.
+
 ---
 
 ## What you get back
@@ -515,6 +573,7 @@ ClipperAi keeps media only as long as it's useful. Metadata (transcripts, clip d
 |---|---|---|
 | Uploaded source video | R2 `uploads/<id>` | Deleted as soon as its project finishes, fails or is cancelled. R2 removes any leftover after **1 day**. |
 | Clips, captions, thumbnails, `clips.json` | R2 `projects/<project id>/` | **30 days** (deleted automatically by R2). |
+| Copy of a clip being posted | Public bucket, `<post id>.mp4` | Until the post has gone out (or failed, or is unscheduled); R2 removes any leftover after **45 days**. |
 | Downloaded video, audio chunks, render files | Worker's `tmp/<project id>/` | Deleted after every run, including failures. |
 | Transcripts | Postgres `transcripts` | Kept, so the same video is never transcribed twice. |
 
@@ -550,7 +609,10 @@ so it keeps working even if the backend is down. R2 removes expired objects with
   `localhost`, private networks and cloud metadata addresses are rejected.
 - **Uploads are restricted** to video content types and 5 GB, and the file must actually exist in storage before a
   project is accepted.
-- **Files are private.** They're only reachable through signed links that expire.
+- **Files are private.** They're only reachable through signed links that expire. The one exception is a clip you
+  publish: it's copied to a separate public bucket under a random name for Buffer to fetch, and deleted once posted.
+- **No social passwords.** Social accounts are connected inside Buffer; ClipperAi only holds the Buffer API key, in
+  `.env` on the server.
 - **No shell injection.** External programs are run with argument lists, never by building shell command strings.
 - **Licensing is checked.** Copyleft (GPL/AGPL) code is avoided in the product; see [DECISIONS.md](DECISIONS.md).
 
@@ -577,13 +639,15 @@ biggest cost is server time for rendering. Re-processing a video reuses its cach
 ```bash
 python test_clipper.py   # engine: cut snapping, model-output validation, clip selection, transcript stitching,
                          # audio chunk files, caption timing, face-tracking shots (needs ffmpeg)
-python test_jobs.py      # jobs + storage + billing: queueing, retries and backoff, permanent failures, cancellation,
-                         # crash recovery, uploads, signed links, expiry, cleanup, review, content package,
-                         # plans, usage and limits
+python test_jobs.py      # jobs + storage + billing + publishing: queueing, retries and backoff, permanent failures,
+                         # cancellation, crash recovery, uploads, signed links, expiry, cleanup, review, content
+                         # package, plans, usage and limits, Buffer channels, post now / scheduled, per-network
+                         # input, status checks, bad or revoked key, rate limit, refused and failed posts, unschedule
 ```
 
-`test_jobs.py` starts a throwaway Postgres (`pgserver`) and a fake S3 server (`moto`), so it doesn't touch real data or
-your R2 bucket. It needs internet access for DNS checks. Both print `ok` when everything passes.
+`test_jobs.py` starts a throwaway Postgres (`pgserver`), a fake S3 server (`moto`) and a fake Buffer
+(`fake_buffer.py`), so it doesn't touch real data, your R2 bucket or your Buffer account. It needs internet access for
+DNS checks. Both print `ok` when everything passes.
 
 With the backend and website running, `node check.mjs` (from `apps/website`) checks the website's proxy: the key is
 added, other sites are refused, backend errors and validation pass through, and every page loads. It makes no paid
@@ -591,7 +655,8 @@ calls.
 
 `walkthrough.mjs` uses the site like a person in headless Microsoft Edge: refused without a plan, pricing → checkout →
 plan, switching plans, several links and several uploaded files at once, approve, edit, copy, reject, **Download all**,
-cancel plan. It changes the local dev database, so it needs its fixture first:
+the Publishing page, **Publish** now and scheduled, unschedule, cancel plan. It needs the backend started with
+`python dev.py --fake-buffer`, and it changes the local dev database, so it needs its fixture first:
 
 ```bash
 cd apps/backend && python dev_fixture.py            # prints <project id> <media folder>; refuses if DATABASE_URL is set
@@ -619,6 +684,11 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | Website: `401 invalid API key` | `BACKEND_API_KEY` in `apps/website/.env.local` must equal `API_KEY` in `apps/backend/.env`. Restart the website after changing it. |
 | Locally, downloads over ~1–2 MB stall and reset (`RetriesExceededError`, `WinError 10054`), or yt-dlp says `CERTIFICATE_VERIFY_FAILED` | Antivirus web scanning (seen with Avast Web Shield) is intercepting the traffic, even on `127.0.0.1`. Add exceptions for `127.0.0.1`/`localhost` and HTTPS scanning, or pause it while testing. |
 | `402 Choose a plan to start making clips.` | Pick any plan on `/pricing` (free while payments are switched off). |
+| Publishing: *"Buffer isn't connected yet"* / *"Buffer didn't accept the API key"* | Create a key in Buffer (Settings → API), put it in `BUFFER_API_KEY` and restart the API. |
+| Publishing: *"Publishing isn't set up yet"* or Buffer says *"Video could not be read from its URL"* | Set up the public bucket (step 5 of [Set up the R2 bucket](#set-up-the-r2-bucket)) and check that `S3_PUBLIC_URL` opens a file in a private browser window. |
+| Publishing: no channels to choose | Connect the social accounts in Buffer first; *Reconnect it in Buffer* means Buffer lost access to that account. |
+| Instagram says *Needs an Instagram creator or business account* | Buffer can't post to personal Instagram profiles automatically. Switch it to a creator or business account in Instagram, then reconnect it in Buffer. |
+| A post shows *Didn't post* | The reason comes from Buffer or the network. Dismiss it and publish again once it's fixed. If the video couldn't be fetched, check that storage is real R2 (not `dev.py`'s fake S3). |
 
 ---
 
@@ -629,10 +699,10 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | 0 | Research: components, licenses, costs ([DECISIONS.md](DECISIONS.md)) | ✅ Done |
 | 1–2 | Clipping engine: transcription, two-pass selection, speaker framing, captions, thumbnails, per-platform copy | ✅ Done |
 | 3 | Job system: REST API, Postgres queue, worker, retries, cancellation, crash recovery | ✅ Done |
-| 4 | Storage: R2, direct uploads, signed links, automatic cleanup | ✅ Built and tested against a local S3; live R2 test pending |
+| 4 | Storage: R2, direct uploads, signed links, automatic cleanup | ✅ Done: tested against a local S3 and checked live on R2 |
 | 5 | Website: product UI, subscriptions and payments, usage | Built locally: batch submit, progress, review, ZIP download, pricing/checkout/billing (payments switched off) |
-| 6 | Publishing through Buffer | Next |
-| 7 | Content calendar and scheduling | Planned |
+| 6 | Publishing through Buffer | ✅ Done: post now, scheduled and unscheduled posts tested through the website against real Buffer, YouTube and R2 |
+| 7 | Content calendar and scheduling | Next |
 | 8 | MCP server for AI assistants | Planned |
 | — | Telegram bot | Planned |
 | 9 | Accounts, plans, usage limits, cost tracking | Partly: plans and monthly limits for one workspace; accounts, real payments and cost tracking planned |
@@ -643,6 +713,8 @@ Known limitations today:
 - There's one shared API key and no sign-in on the website; per-user accounts arrive with billing, so the website is
   for local use until then. Plans and usage belong to that single workspace.
 - Payments are switched off: plans show prices but charge nothing. No payment provider is connected yet.
+- Publishing uses one Buffer account (the workspace's key), every YouTube upload gets the "People & Blogs" category,
+  and the public bucket uses Cloudflare's rate-limited `r2.dev` address until a custom domain is connected.
 - Editing a clip's copy doesn't re-render the video, so the burned-in hook can't be changed yet.
 - Framing follows the largest face, which isn't always the person speaking in two-person shots; handheld footage can
   produce visible crop jumps.

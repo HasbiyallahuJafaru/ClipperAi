@@ -1,11 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { api, clock, PLATFORMS, type Clip, type Platform, type Posts, type Review } from "../../lib";
+import { api, clock, PLATFORMS, type Clip, type Platform, type Posts, type Publication, type Review } from "../../lib";
+import { PostList, PublishForm, type Channels } from "./publish";
 
-export function ClipReview({ projectId, clip, onChange }: { projectId: string; clip: Clip; onChange: (clip: Clip) => void }) {
+export function ClipReview({ projectId, clip, onChange, posts, channels, until, onPosts }: {
+  projectId: string;
+  clip: Clip;
+  onChange: (clip: Clip) => void;
+  posts: Publication[];
+  channels: Channels;
+  until: string | null;
+  onPosts: () => void;
+}) {
   const [platform, setPlatform] = useState<Platform>("tiktok");
   const [editing, setEditing] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState("");
@@ -133,7 +143,10 @@ export function ClipReview({ projectId, clip, onChange }: { projectId: string; c
           </div>
         )}
 
-        {!editing && (
+        {publishing ? (
+          <PublishForm projectId={projectId} clip={clip} posts={posts} channels={channels} until={until}
+                       onSent={onPosts} onClose={() => setPublishing(false)} />
+        ) : !editing && (
           <div className="mt-8 flex flex-wrap gap-2">
             <button className="btn" aria-pressed={clip.review === "approved"} onClick={() => review("approved")} disabled={busy}>
               {clip.review === "approved" ? "Approved" : "Approve"}
@@ -142,9 +155,13 @@ export function ClipReview({ projectId, clip, onChange }: { projectId: string; c
               {rejected ? "Rejected" : "Reject"}
             </button>
             <button className="btn" onClick={() => setEditing(true)} disabled={busy}>Edit</button>
+            {clip.review === "approved" && clip.video_url && (
+              <button className="btn" onClick={() => setPublishing(true)} disabled={busy}>Publish</button>
+            )}
           </div>
         )}
         {error && <p role="alert" className="mt-4 text-danger">{error}</p>}
+        {posts.length > 0 && <PostList posts={posts} onChange={onPosts} />}
       </div>
     </div>
   );

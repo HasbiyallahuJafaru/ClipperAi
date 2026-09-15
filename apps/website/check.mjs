@@ -32,8 +32,18 @@ assert.deepEqual((await response.json()).plans.map((p) => p.price_cents), [1500,
 response = await call("/api/billing/subscribe", { method: "POST", body: '{"plan": "free"}' });
 assert.equal(response.status, 422, "unknown plans are refused");
 
+response = await call("/api/publishing/channels"); // 200 with a working Buffer key, else a readable reason
+const channels = await response.json();
+assert.ok(response.status === 200 ? Array.isArray(channels) : typeof channels.detail === "string", JSON.stringify(channels));
+assert.equal((await call(`/api/projects/${missing}/publications`)).status, 404);
+assert.equal((await call(`/api/publications/${missing}`, { method: "DELETE" })).status, 404);
+response = await call(`/api/projects/${missing}/clips/1/publish`, { method: "POST", body: '{"channels": []}' });
+assert.equal(response.status, 422, "at least one channel");
+response = await call(`/api/projects/${missing}/clips/1/publish`, { method: "POST", body: '{"channels": ["a"]}' });
+assert.equal(response.status, 404, "a missing clip is refused before Buffer is asked anything");
+
 for (const page of ["/", "/dashboard", "/projects/new", `/projects/${missing}`, "/pricing", "/checkout?plan=pro",
-                    "/settings/billing"]) {
+                    "/settings/billing", "/settings/integrations"]) {
   assert.equal((await fetch(`${site}${page}`)).status, 200, page);
 }
 console.log("ok");

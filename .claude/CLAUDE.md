@@ -40,7 +40,8 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
   caption. Never use generative video/image models for what FFmpeg can do.
 - **Never trust model output**: schema-validate (pydantic), retry, reject. Timestamps come from the transcript/pass 1,
   never invented. **Spoken caption text comes only from the transcript.**
-- **Business logic lives in backend service modules** (`jobs.py` projects, `billing.py` plans/limits; shared by REST
+- **Business logic lives in backend service modules** (`jobs.py` projects, `billing.py` plans/limits, `publishing.py`
+  Buffer; shared by REST
   API, MCP server, Telegram bot, worker). Route and bot/tool handlers stay thin and call the same services — no
   duplicate logic per channel. The website only talks to the backend through its `/api/*` proxy.
 - **Long work never blocks a request**: create a project → return id → worker processes → client polls status.
@@ -49,7 +50,8 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
   temp media; bounded worker concurrency; track real per-user costs (Phase 9). Don't sacrifice reliability for cents.
 - **Modular monolith.** No Redis, queues, ORMs or microservices until a demonstrated need.
 - **Storage**: never Railway's filesystem for media. R2 with signed URLs; lifecycle rules delete `uploads/` (1 day)
-  and `projects/` (30 days). Don't store users' source videos beyond processing.
+  and `projects/` (30 days). Don't store users' source videos beyond processing. Only exception: a clip being
+  published is copied to the public bucket (`S3_PUBLIC_BUCKET`, Buffer can't read signed links) and deleted once posted.
 - **Publishing through a provider (Buffer)**, users connect their own accounts via OAuth/their key; never ask for
   social passwords. Don't build per-network integrations in the MVP.
 - **UI (Phase 5)**: Next.js + TypeScript + Tailwind, extremely clean and minimal, no gradients/card clutter/generic
@@ -74,9 +76,11 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
 ```bash
 export PATH="$PATH:/c/Users/USER/AppData/Local/Microsoft/WinGet/Links"   # ffmpeg/ffprobe (winget) in Bash tool shells
 .venv/Scripts/python test_clipper.py        # engine checks (needs ffmpeg)
-.venv/Scripts/python test_jobs.py           # queue + storage + billing vs throwaway Postgres (pgserver) + S3 (moto)
+.venv/Scripts/python test_jobs.py           # queue + storage + billing + publishing vs throwaway Postgres (pgserver),
+                                            # S3 (moto) and Buffer (fake_buffer.py)
 .venv/Scripts/python clipper.py <url> -n 3  # CLI run -> out/<source key>/
 .venv/Scripts/python dev.py                 # API :8000 + worker + fake in-memory S3 (moto :9000), no Cloudflare needed
+.venv/Scripts/python dev.py --fake-buffer   # same, publishing goes to an in-memory Buffer with demo channels
 .venv/Scripts/python jobs.py                # worker
 .venv/Scripts/python -m uvicorn api:app --port 8000
 .venv/Scripts/python storage.py setup       # once per bucket: lifecycle + CORS
@@ -87,7 +91,8 @@ Website (run from `apps/website`; backend must be running, `.env.local` has `BAC
 NODE_EXTRA_CA_CERTS=C:/Users/USER/.certs/ca-bundle-with-windows-roots.pem npm install   # Avast breaks npm TLS here
 npm run dev                  # http://127.0.0.1:3000 (npm run build && npm run start for the production build)
 node check.mjs               # proxy checks against the running site (no paid calls)
-# browser walkthrough of every flow (headless Edge via DevTools protocol; changes the local dev DB):
+# browser walkthrough of every flow (headless Edge via DevTools protocol; backend must be `dev.py --fake-buffer`;
+# changes the local dev DB):
 cd ../backend && .venv/Scripts/python dev_fixture.py   # prints <project id> <media folder>
 cd ../website && node walkthrough.mjs <project id> <media folder>
 ```

@@ -1,6 +1,6 @@
 # Build memory
 
-Last updated: 2026-09-14. Update after every milestone: move items from "Left" to "Done" with how they were verified.
+Last updated: 2026-09-15. Update after every milestone: move items from "Left" to "Done" with how they were verified.
 
 ## Done
 
@@ -110,6 +110,73 @@ Last updated: 2026-09-14. Update after every milestone: move items from "Left" t
 - **Not verified:** clipboard copy succeeding (headless blocks it even with permission; the blocked message shows);
   a new project processed to completion (Avast); usage minutes on real videos (logic tested with fixtures only).
 
+### Phase 6 — Publishing through Buffer (2026-09-15, pushed)
+- Research (live, read-only): Buffer GraphQL schema by introspection. Account has **0 channels**. Third-party OAuth
+  app registration reported closed; docs: "Your API key acts on behalf of your account only". **Buffer fetches media
+  when the post goes out** and warns against signed/expiring URLs. Limits 100 req/15 min (429 + Retry-After).
+- Decisions: auth = the workspace's `BUFFER_API_KEY` in `.env` (defaulted; rule "secrets only in .env"; no key form,
+  no DB-stored tokens until accounts); post now or at a time for one clip (batch = Phase 7); only the six networks we
+  write copy for (`twitter` → `posts.x`). **Media (user chose, after live tests showed Buffer can't read signed
+  links):** separate public R2 bucket `clipperai-published` (its r2.dev address is in `.env` as `S3_PUBLIC_URL`; custom domain
+  before launch; enabled via Cloudflare API `PUT /accounts/{id}/r2/buckets/{name}/domains/managed`);
+  `storage.public_copy` server-side CopyObject to `<publication id>.mp4` per post; `publishing.save` deletes it when
+  status becomes sent/error, `remove` and NOT_FOUND delete it too; 45-day lifecycle backstop; scheduling up to 30 days
+  (`AHEAD`); `.env`: `S3_PUBLIC_BUCKET`, `S3_PUBLIC_URL` (publish refuses without them). User rejected streaming
+  through the backend (server cost).
+- `migrations/005_publishing.sql`: `publications` (one row per clip×channel; row inserted before Buffer is called;
+  partial unique index `(project_id, clip_idx, channel_id) where status <> 'error'` stops double posting; status mirrors
+  Buffer: sending/scheduled/sent/error/draft/needs_approval). `publishing.py`: `call` (urllib; 401/429/5xx/network/
+  GraphQL errors → `PublishError(message, status, code)`), `channels` (orgs → channels, `usable`), `publish`
+  (approved + live files + time window + usable channels + not already on channel → createPost per channel with
+  per-network input: YouTube `metadata.youtube.title[:100]`, Instagram reel + shouldShareToFeed, Facebook reel,
+  thumbnailOffset 1000 on TikTok/Instagram, `needsApproval: false`; a refused channel is saved as error and the rest
+  continue; key/limit/network trouble stops), `publications` (re-checks posts whose time has come, ≤1/min each; NOT_FOUND
+  → row deleted; Buffer errors swallowed so the page loads), `remove` (deletePost for scheduled; local delete for
+  failed; refuses sent/sending). `jobs.delete_project` refuses while posts still have to go out. API: `GET
+  /api/publishing/channels`, `POST /api/projects/{id}/clips/{idx}/publish` (201), `GET /api/projects/{id}/publications`,
+  `DELETE /api/publications/{id}` (204); one exception handler maps `PublishError.status`. `fake_buffer.py` (answers in real shapes, enforces required inputs, `fail` switch) used by `test_jobs.py`
+  and `dev.py --fake-buffer`.
+- Website: approved clips with live files get **Publish** → inline form (channels with reasons: already posted/
+  scheduled, reconnect in Buffer, locked, can't post here yet; Now/Later with native datetime-local min/max from
+  `schedule_until`) → per-clip **Posts** list (Posting..., Scheduled for, Posted + View post, Didn't post: reason;
+  Unschedule/Dismiss). Publications polled every 20 s while something is due (`usePoll` gained `reload()`); channels
+  loaded once per page on first open. `/settings/integrations` ("Publishing" in nav): connection state, channel list.
+- Verified: `test_jobs.py` ok (no key, wrong key, usable flags, approve-only, past/too-far times refused without
+  Buffer calls, unknown/disconnected channel, per-network inputs, 7-day link downloads, duplicate refused, scheduled
+  input exact, status refresh throttle + future posts not queried, sending→sent, failure at send time, queue-limit
+  refusal then retry, rate limit at lookup and mid-publish (row recorded, later channels not tried, page still loads),
+  revoked key, 503, unreachable, unschedule, dismiss, deleted-in-Buffer disappears, delete-project guard, expiry
+  window, cascade); `test_clipper.py` ok; `next build` ok; `node check.mjs` ok (new routes 404/422 before Buffer);
+  `walkthrough.mjs` against `dev.py --fake-buffer` passed end to end (Publishing page 4 of 6 ready, one Publish button
+  (rejected clip has none), post now TikTok+YouTube, schedule X 2 days ahead, unschedule); screenshots light/dark/
+  390 px checked once, fixed (row alignment, truncation, phone stacking, tap targets), re-checked; impeccable
+  detector: no findings. **Every createPost input (6 networks × now/scheduled), post query and deletePost sent to the
+  real API** against a non-existent channel: all "Channel not found" (schema-valid, nothing posted). Real key lists 0
+  channels. Dev DB cleaned afterwards (4 old projects, no plan).
+- **Real post verified (2026-09-15, user-approved):** scratch script doing exactly what `publish` does (4 s 1080×1920
+  test clip in `clipperai` → `public_copy` → `post_input` + `privacy: private` for the test only → createPost) to
+  YouTube "The Micro-Fix": `shareNow` came back **`sent` synchronously** with `dueAt` = now, `sentAt` +1.5 s,
+  `externalLink` https://www.youtube.com/watch?v=uVqdDp9WFvc, `sharedNow: true`; both test files deleted after. (The
+  private video stays on the channel; the user deletes it in YouTube Studio.) After the switch to public copies:
+  `test_jobs.py` ok (plain public link per post, copies deleted on sent/failed/refused/rate-limited/unscheduled/deleted
+  in Buffer, copy gone before send → post fails, no copies left, missing config refused, 30-day window), `check.mjs`
+  ok, `walkthrough.mjs` ok against `dev.py --fake-buffer` (fake S3 public bucket via bucket policy), dev DB cleaned.
+- **Website against real Buffer + R2 verified (2026-09-15, user said "test this", public posts OK):** scratch
+  `real_fixture.py` (2 test clips 1080×1920 6 s, project in local dev DB, files in real `clipperai`) + `uvicorn
+  api:app` (real .env) + `npm run start` + scratch `real_publish.mjs` (headless Edge, DevTools). Results: Publishing
+  page listed both channels; clip 1 **Post now** → YouTube `sent` + public link, Instagram refused by Buffer
+  ("Instagram personal profile channels require notification scheduling.", channel `type: profile`, descriptor
+  "Personal Account") → **`channels()` now marks personal Instagram profiles unusable**, UI reason "Needs an Instagram
+  creator or business account" (fake Buffer has such a channel + refusal; test_jobs + walkthrough cover it); after the
+  restart the page and the clip 2 form showed that reason; clip 2 YouTube **scheduled for tomorrow → Unschedule**
+  (real deletePost, row gone) → **scheduled 5 min ahead** → Buffer `sent` 2 s after dueAt, page showed "Posted 6:54 AM"
+  + View post (backend refresh after due time). Public bucket empty afterwards (copies deleted on sent/error/
+  unscheduled); test project deleted (R2 main bucket empty). Then `check.mjs` + `walkthrough.mjs` (fake Buffer, now
+  "4 of 7 channels") ok, `test_clipper.py` + `test_jobs.py` ok, dev DB cleaned. Public test videos on "The Micro-Fix":
+  watch?v=NbWBjHIFG2M and watch?v=VHLmTNy7Ex8 (plus the earlier private uVqdDp9WFvc): user deletes them.
+- **Not verified:** Instagram posting for real (needs a creator/business account), TikTok/Facebook/X/LinkedIn on real
+  channels (Facebook reels on Pages/Groups); real 429 headers; r2.dev rate limits under load.
+
 ### Repo (2026-09-14)
 - Pushed to https://github.com/HasbiyallahuJafaru/ClipperAi (public, `main`, first commit 402473e) with README,
   `.env.example`, description and topics. Layout: `apps/backend`, `apps/website` (empty), `apps/mcp` (empty).
@@ -123,13 +190,18 @@ Last updated: 2026-09-14. Update after every milestone: move items from "Left" t
 ## Left
 
 ### Immediate
-- [ ] **Live R2 test** (2026-09-14: blocked on token permissions). Account `cc1b1537ed8b55e4e7bb17b518285b38`.
-      `.env` now has `S3_ENDPOINT`, `S3_BUCKET=clipperai-media` (not created yet) and S3 keys derived from the user's
-      Cloudflare user token (`cfut_…`: key id = token id, secret = SHA-256 of token value). The token is active but has
-      no R2/account permission (Cloudflare API: no accounts visible, R2 list = auth error; S3 ListBuckets = AccessDenied).
-      Needed: add **Account → Workers R2 Storage → Edit** to that token (derived keys then work unchanged), or create an
-      R2 "Admin Read & Write" token and paste its Access Key ID/Secret into `.env`. R2 must be enabled on the account.
-      Then: create bucket, `storage.py setup`, upload project + YouTube project end to end, push fixes.
+- [x] **R2 storage live** (2026-09-15). User created bucket **`clipperai`** and an R2 **Admin Read & Write** token
+      (account-wide: it can also see the user's unrelated bucket `zoomguru-releases`, never touch it). Keys are in
+      `.env` (`S3_BUCKET=clipperai`, default endpoint). Bucket had only R2's default "abort multipart after 7 days"
+      rule; `storage.setup` replaced all rules, so it now adds a bucket-wide `unfinished-uploads` rule (1 day) itself.
+      `python storage.py setup` applied: uploads 1 d, projects 30 d, unfinished uploads 1 d, CORS. Verified live
+      (scratch script): server upload + HEAD size, 24 h signed GET (Content-Disposition attachment, video/mp4), 7-day
+      signed GET, streamed read, CORS preflight 204 `*`, signed PUT + worker download, wrong content type → 403,
+      delete_prefix, bucket empty after. `test_jobs.py` ok after the rule change.
+- [ ] **Rotate the R2 token**: the user pasted its values into the chat. Create a new one (ideally "Apply to specific
+      buckets only: clipperai"), put it in `.env`, delete the old one in Cloudflare.
+- [ ] Not yet on real R2: a large (tens of MB, multipart) clip upload through Avast, and a full project processed end
+      to end (costs Groq/DeepSeek cents; Avast may block yt-dlp/DeepSeek, so use the upload path).
 - [ ] Upgrade Groq to Developer plan before real customers (free plan: 20 req/min, 7,200 audio-s/hour,
       28,800 audio-s/day shared across all customers).
 
@@ -155,19 +227,23 @@ Last updated: 2026-09-14. Update after every milestone: move items from "Left" t
 - [ ] Needs from backend: user accounts/auth (replace shared API_KEY; then the website proxy must check the signed-in
       user instead of injecting one key). Until then the website must not be deployed publicly.
 
-### Phase 6 — Publishing (Buffer)
-- [ ] Buffer GraphQL `createPost` with video `url` (must be publicly reachable) + `schedulingType`/`mode`/`dueAt`.
-- [ ] Decide auth: Buffer docs mention OAuth for third-party apps; MVP fallback = user pastes personal Buffer key.
-- [ ] Signed links last ≤7 days → issue a fresh link when sending to Buffer; confirm whether Buffer copies media.
-- [ ] **Prerequisite for a real test:** Buffer fetches the video from its URL over the internet, so `dev.py`'s fake S3
-      (`127.0.0.1:9000`) can't be used; needs the live R2 bucket (token permission, see Immediate) or a mocked Buffer.
-- [ ] Spec §22 suggests a `PublishingProvider` interface; project rule is no interface with one implementation → one
-      `publishing.py` service with Buffer functions (swap the module later). §46 tests: OAuth failure, expired token,
-      rate limits, publishing failure, scheduled post. Only approved clips should be publishable; publishing status
-      shown per clip. Scheduling many clips over days is Phase 7 (calendar).
+### Phase 6 — Publishing (Buffer): remaining
+- [x] First real post (private YouTube test via script), see Done. Buffer channels now: YouTube "The Micro-Fix",
+      Instagram @theprimefactor.
+- [x] Website against real Buffer + R2: post now, schedule, unschedule (2026-09-15, see Done). Runs the API on real R2,
+      not `dev.py` (forces fake S3). **Never post publicly to the user's accounts without their explicit go-ahead.**
+- [ ] Instagram for real: user switches @theprimefactor to a creator/business account and reconnects it in Buffer.
+- [ ] Maybe: YouTube privacy choice (public/unlisted/private) on the Publish form.
+- [ ] Custom domain for the public bucket before launch (r2.dev is rate-limited, "for development").
+- [x] Committed + pushed Phase 6 (2026-09-15, user asked).
 
 ### Phase 7 — Content calendar
-- [ ] Frequency/days/times/start date/platforms → distribute approved clips; list-style calendar UI; calendar.csv.
+- [ ] Frequency/days/times/start date/platforms → distribute approved clips; list-style calendar UI; calendar.csv;
+      "Schedule all" (§40). Reuse `publishing.publish` per slot.
+- [x] Link-expiry blocker solved in Phase 6 by public copies: posts can be scheduled up to 30 days ahead, and a copy
+      outlives the 30-day `projects/` rule (45-day backstop). A calendar longer than 30 days would need `AHEAD` and
+      `PUBLIC_DAYS` raised together.
+- [ ] Batch publishing many clips = many Buffer calls (100/15 min): consider the worker queue if it gets slow.
 
 ### Phase 8 — MCP (`apps/mcp` or inside backend — decide here)
 - [ ] Official `mcp` Python SDK, Streamable HTTP at `/mcp`, authenticated with per-user tokens issued on the website;
@@ -201,6 +277,11 @@ Last updated: 2026-09-14. Update after every milestone: move items from "Left" t
 - One DB connection per call (add psycopg_pool when latency shows it); fixed worker concurrency.
 - Source URL DNS checked once (rebinding); shared API key.
 - Website proxy injects the one backend key for anyone who can reach the site (bound to 127.0.0.1 until accounts).
+- Publishing: one Buffer key for the workspace; YouTube category fixed to 22; public copies of posts nobody re-checks
+  stay until the 45-day rule; if Buffer marks a post error and the user retries inside Buffer, the copy is already
+  gone (retry from ClipperAi instead); if Buffer creates a post
+  but the reply times out, the row says error and a retry can post twice; a crash between inserting a publication and
+  Buffer's answer leaves a `sending` row with no Buffer id (blocks that clip×channel until removed via DELETE).
 - Billing: one workspace; calendar-month usage; running projects don't reserve allowance (a month can overshoot by one
   video); minutes = speech length of completed projects; ZIP bytes flow through the API server.
 - STT fallback when needed: onnx-asr + Parakeet v3 on CPU (~$0.01/audio-hr, European languages only).
@@ -245,6 +326,29 @@ Last updated: 2026-09-14. Update after every milestone: move items from "Left" t
   `Browser.grantPermissions` (browser-level socket) + focus emulation.
 - With Avast active, a worker job on an uploaded tone video sat in "analyzing" > 10 min (DeepSeek call apparently hung
   behind HTTPS interception); one worker = whole queue waits. Cause not confirmed.
+- **Buffer API facts (checked live 2026-09-15):** bad key → HTTP 401 `{"errors":[{"extensions":{"code":
+  "UNAUTHENTICATED"}}]}`; `post(input:{id})` unknown → HTTP 200, `errors[0].extensions.code = NOT_FOUND`, `data: null`
+  (so never batch several `post` lookups with aliases: one missing post nulls the whole response); `createPost` refusals
+  are typed `MutationError`s with `message` (unknown channel → "Channel not found"); `deletePost` unknown →
+  `VoidMutationError` "Document not found". `CreatePostInput.needsApproval` and `assets` are required; `Service` uses
+  `twitter` for X; `posts` query can't filter by id. Introspection works with a personal key.
+- **Real posting findings (2026-09-15, YouTube channel "The Micro-Fix"):** (1) YouTube needs `categoryId` too
+  ("Invalid post: YouTube posts require a category."; the schema says "Required on create", my first dump truncated
+  descriptions) → `publishing.py` sends "22". (2) **Buffer reads and checks the video at createPost**, not only at send
+  time. (3) **Buffer can't read R2 signed links** ("Invalid post: Video could not be read from its URL.", with and
+  without response-content-disposition), while a plain public mp4 URL is read and analysed. R2 signed GET links answer
+  HEAD with 403 (likely cause). (4) Buffer → YouTube = Shorts: vertical, ≥360 px each side (ours are 1080×1920).
+  Tests used drafts (`saveToDraft: true`, `mode: addToQueue`); all refused, nothing created. So published clips need a
+  **public, non-signed link** → public bucket copies (see Phase 6 Done). (5) The r2.dev address answers HEAD and GET;
+  R2 cross-bucket CopyObject keeps Content-Type. (6) moto refuses anonymous reads unless the bucket has a public-read
+  policy, and refuses HEAD even then: the fake Buffer checks links with a ranged GET.
+- **Buffer + Instagram personal profiles:** automatic posting is refused ("require notification scheduling"); Buffer
+  channel `type` is `profile` for personal, `business` for creator/business. YouTube channels are `type: channel`.
+- Scheduled posts on real Buffer go out on time (sent 2 s after `dueAt`); `dueAt` comes back as `...Z` with seconds 0.
+- `fake_buffer.py` matches queries by substring (`createPost`, `deletePost`, `post(input`, `channels(`,
+  `organizations`): keep `publishing.py`'s documents containing those words or extend the fake.
+- Walkthrough race: text that appears on a busy button ("Posting...") also matches `has()`; wait on the specific
+  region (`section[aria-label=Posts]`).
 - Next.js 16 ships its docs in `apps/website/node_modules/next/dist/docs/` (route handlers take
   `RouteContext<"/api/[...path]">`, params are Promises, `middleware` is now `proxy`).
 
@@ -254,4 +358,4 @@ Last updated: 2026-09-14. Update after every milestone: move items from "Left" t
   slash skill: read `~/.agents/skills/ui-ux-pro-max/SKILL.md`, search script `scripts/search.py`) and
   `design-taste-frontend` (installed globally 2026-09-14). They conflict with each other and with ponytail in places
   (icon libs, Motion/GSAP, stock images, indigo palettes); the project brief + ponytail win, use their checklists.
-- Keys: GROQ, DEEPSEEK, BUFFER in `apps/backend/.env` (user pastes them; never echo). R2 credentials pending.
+- Keys: GROQ, DEEPSEEK, BUFFER, R2 (`S3_*`, `S3_PUBLIC_*`) in `apps/backend/.env` (never echo).

@@ -1,6 +1,7 @@
 // Clicks through the website in headless Edge like a person would (DevTools protocol, no extra packages): no plan ->
-// refused, pricing -> checkout -> plan, switch plan, batch links, batch uploads, review, copy, Download all, cancel.
-// Needs `python dev.py` + `npm run start` running and fixture data (changes the dev database):
+// refused, pricing -> checkout -> plan, switch plan, batch links, batch uploads, review, copy, Download all, publish
+// and schedule, cancel.
+// Needs `python dev.py --fake-buffer` + `npm run start` running and fixture data (changes the dev database):
 //   cd apps/backend && python dev_fixture.py      -> prints <project id> <media folder>
 //   cd apps/website && node walkthrough.mjs <project id> <media folder>
 // Screenshots go to <temp>/clipperai-walkthrough. Windows + Edge (the path below); Chrome takes the same flags.
@@ -215,7 +216,57 @@ try {
   assert.ok(existsSync(savedZip), `downloads: ${readdirSync(downloads)}`);
   ok(`Download all: ${zip.size} byte ZIP fetched; clicking it saved ${savedZip} (${statSync(savedZip).size} bytes)`);
 
-  // 7. cancel the plan
+  // 7. publishing through the fake Buffer: settings page, post now, schedule, unschedule
+  await go("/settings/integrations");
+  await has("Reconnect it in Buffer");
+  const settings = await js("document.body.innerText");
+  assert.ok(settings.includes("4 of 7 channels can post clips.") && settings.includes("Clips can't be posted here yet")
+            && settings.includes("Needs an Instagram creator or business account"), settings);
+  await shot("cdp-integrations");
+  await shot("cdp-integrations-phone", 390, true);
+  ok("Publishing page: connected, 4 of 7 channels ready, the disconnected, unsupported and personal ones say why");
+
+  await go(`/projects/${PROJECT}`);
+  await has("Download all");
+  const publishButtons = await js(`[...document.querySelectorAll("button")].filter((b) => b.textContent === "Publish").length`);
+  assert.equal(publishButtons, 1, "only the approved clip can be published");
+  await click("Publish");
+  await has("Clips can't be posted here yet");
+  const tick = (value) => js(`document.querySelector("input[value=${value}]").click() || true`);
+  await tick("channel-tiktok");
+  await tick("channel-youtube");
+  await shot("cdp-publish-form");
+  await click("Post now");
+  const postList = (text) => until(`document.querySelector("section[aria-label=Posts]")?.innerText.includes(${JSON.stringify(text)})`, `"${text}" in the post list`);
+  await postList("Posting...");
+  let posts = (await api(`projects/${PROJECT}/publications`)).publications;
+  assert.deepEqual(posts.map((p) => `${p.service} ${p.status}`).sort(), ["tiktok sending", "youtube sending"]);
+  ok("Post now to TikTok and YouTube: both show Posting... and exist in Buffer");
+
+  await click("Publish");
+  await has("Already posted");
+  await tick("channel-twitter");
+  await js(`document.querySelectorAll("input[name=when]")[1].click() || true`);
+  await until(`!!document.querySelector("input[name=due_at]")`, "the date field");
+  const due = await js(`(() => { const d = new Date(Date.now() + 2 * 86400000);
+    return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()`);
+  await type("input[name=due_at]", due);
+  await shot("cdp-schedule-form", 390);
+  await click("Schedule");
+  await postList("Scheduled for");
+  posts = (await api(`projects/${PROJECT}/publications`)).publications;
+  const x = posts.find((p) => p.service === "twitter");
+  assert.ok(x.status === "scheduled" && Math.abs(new Date(x.due_at) - (Date.now() + 2 * 86400000)) < 120000, JSON.stringify(x));
+  await shot("cdp-posts");
+  await shot("cdp-posts-phone", 390, true);
+  await js("window.confirm = () => true");
+  await click("Unschedule");
+  await until(`!document.body.innerText.includes("Scheduled for")`, "the scheduled post to go");
+  posts = (await api(`projects/${PROJECT}/publications`)).publications;
+  assert.deepEqual(posts.map((p) => p.service).sort(), ["tiktok", "youtube"]);
+  ok(`Schedule X for ${due}: shows Scheduled for, Unschedule removes it`);
+
+  // 8. cancel the plan
   await go("/settings/billing");
   await has("Cancel plan");
   await js("window.confirm = () => true");

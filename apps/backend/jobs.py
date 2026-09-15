@@ -175,10 +175,13 @@ def cancel_project(project_id: UUID) -> dict | None:
 
 
 def delete_project(project_id: UUID) -> dict | None:
-    """Deletes a project with its clips and files. None if missing or still being processed (cancel it first)."""
+    """Deletes a project with its clips and files. None if missing, still being processed (cancel it first) or with
+    posts waiting to go out (they'd still go out, with no way left to follow or unschedule them: unschedule first)."""
     with db.connect() as c:
-        project = c.execute("delete from projects where id = %s and status <> all(%s) returning *",
-                            (project_id, RUNNING)).fetchone()
+        project = c.execute("""delete from projects where id = %s and status <> all(%s) and not exists (
+                                   select 1 from publications where project_id = projects.id
+                                       and status not in ('sent', 'error'))
+                               returning *""", (project_id, RUNNING)).fetchone()
     if project:  # row first: if storage fails now, the bucket lifecycle rules still remove the files
         storage.delete_prefix(f"projects/{project_id}/")
         discard_upload(project["source"])

@@ -68,6 +68,52 @@ export type Billing = {
   history: Subscription[];
 };
 
+// Publishing (apps/backend/publishing.py). Channels are the social accounts connected in Buffer.
+export type Channel = {
+  id: string;
+  service: string; // Buffer's name for the network: tiktok, instagram, youtube, twitter...
+  type: string; // profile, business, page, channel...
+  name: string;
+  displayName: string | null;
+  isDisconnected: boolean;
+  isLocked: boolean;
+  usable: boolean;
+};
+
+export type Publication = {
+  id: string;
+  clip_idx: number;
+  channel_id: string;
+  service: string;
+  channel_name: string;
+  status: "sending" | "scheduled" | "sent" | "error" | "draft" | "needs_approval";
+  due_at: string | null;
+  sent_at: string | null;
+  external_link: string | null;
+  error: string | null;
+};
+
+export type Publications = { publications: Publication[]; schedule_until: string | null };
+
+const NETWORKS: Record<string, string> = {
+  tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube", linkedin: "LinkedIn", facebook: "Facebook",
+  twitter: "X", threads: "Threads", bluesky: "Bluesky", mastodon: "Mastodon", pinterest: "Pinterest",
+  googlebusiness: "Google Business", substack: "Substack", whatsapp: "WhatsApp", startPage: "Start Page",
+};
+export const network = (service: string) => NETWORKS[service] ?? service;
+
+/** Why a channel can't take clips, or "" when it can. */
+export const unusable = (channel: Channel) =>
+  channel.usable ? ""
+  : channel.isDisconnected ? "Reconnect it in Buffer"
+  : channel.isLocked ? "Locked by your Buffer plan"
+  : channel.service === "instagram" && channel.type === "profile" ? "Needs an Instagram creator or business account"
+  : "Clips can't be posted here yet";
+
+/** A Date as the value of <input type="datetime-local">, in the viewer's time zone. */
+export const localInput = (date: Date) =>
+  new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
 export const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 export const hours = (minutes: number) =>
@@ -101,10 +147,12 @@ export async function api<T>(path: string, method = "GET", body?: unknown): Prom
   throw Object.assign(new Error(message), { status: response.status });
 }
 
-/** Loads `path`, then reloads it every `ms` while `again(data)` holds. Failed loads retry, except "not found". */
+/** Loads `path`, then reloads it every `ms` while `again(data)` holds. Failed loads retry, except "not found".
+ *  `reload()` loads again now and restarts polling (after an action that may have made it worth polling). */
 export function usePoll<T>(path: string, again: (data: T) => boolean, ms = 3000) {
   const [data, setData] = useState<T>();
   const [error, setError] = useState<Error & { status?: number }>();
+  const [round, setRound] = useState(0);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
@@ -126,8 +174,8 @@ export function usePoll<T>(path: string, again: (data: T) => boolean, ms = 3000)
       stopped = true;
       clearTimeout(timer);
     };
-  }, [path]); // `again` and `ms` are fixed per page, so only a new path restarts polling
-  return { data, setData, error };
+  }, [path, round]); // `again` and `ms` are fixed per page, so only a new path or reload() restarts polling
+  return { data, setData, error, reload: () => setRound((n) => n + 1) };
 }
 
 export function sourceLabel(source: string) {
