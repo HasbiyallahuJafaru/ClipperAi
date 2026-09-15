@@ -42,6 +42,7 @@ export function ClipReview({ projectId, clip, onChange, posts, channels, until, 
     const text = (name: string) => String(form.get(name)).trim();
     save({
       title: text("title"),
+      hook: text("hook"),
       description: text("description"),
       hashtags: text("hashtags").split(/\s+/).filter(Boolean),
       posts: Object.fromEntries(Object.keys(PLATFORMS).map((p) => [p, text(p)])) as Posts,
@@ -98,6 +99,11 @@ export function ClipReview({ projectId, clip, onChange, posts, channels, until, 
               <input name="title" defaultValue={clip.title} required maxLength={300} className="input" />
             </label>
             <label className="grid gap-2 text-sm font-medium">
+              Hook
+              <input name="hook" defaultValue={clip.hook} maxLength={300} className="input" />
+              <span className="font-normal text-muted">An opening line to start your post or voiceover with.</span>
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
               Description
               <textarea name="description" defaultValue={clip.description} rows={3} maxLength={5000} className="input" />
             </label>
@@ -112,7 +118,6 @@ export function ClipReview({ projectId, clip, onChange, posts, channels, until, 
                 <textarea name={key} defaultValue={clip.posts[key as Platform]} rows={3} className="input" />
               </label>
             ))}
-            <p className="text-sm text-muted">The hook is part of the video, so it can&apos;t be changed here.</p>
             <div className="flex flex-wrap gap-2">
               <button className="btn btn-primary" disabled={busy}>{busy ? "Saving..." : "Save changes"}</button>
               <button type="button" className="btn" onClick={() => setEditing(false)} disabled={busy}>Cancel</button>
@@ -121,8 +126,7 @@ export function ClipReview({ projectId, clip, onChange, posts, channels, until, 
         ) : (
           <div className={`transition-opacity ${rejected ? "opacity-45" : ""}`}>
             <h3 className="mt-4 text-xl font-semibold tracking-[-0.02em] text-balance sm:text-2xl">{clip.title}</h3>
-            {/* shown the way it appears in the video: white caption type on a dark box */}
-            <p className="mt-3 w-fit rounded-md bg-ink px-2.5 py-1 font-caption text-sm text-white">{clip.hook}</p>
+            {clip.hook && <p className="mt-3 w-fit rounded-md bg-accent-soft px-2.5 py-1 text-sm font-medium text-accent-ink">Hook: {clip.hook}</p>}
             <p className="mt-4 max-w-prose">{clip.description}</p>
             <p className="mt-2 max-w-prose text-sm text-muted">{clip.reason}</p>
 

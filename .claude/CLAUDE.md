@@ -2,35 +2,58 @@
 
 ## What we are building
 An AI video repurposing SaaS: **one long video → many polished 9:16 clips → captions, hooks, titles, per-platform
-copy → content calendar → automated publishing (Buffer)**, also operable by AI assistants through MCP.
+copy → content calendar → automated publishing (Buffer)**, on the website and in a Flutter mobile app.
 "I give it a video and it gives me a month of content." Full spec: `masterprompt.md` (source of truth for scope and
 phase order). Dependency/license/cost decisions: `DECISIONS.md` (update it whenever a dependency changes).
 
-### Channels (additions to masterprompt.md, decided 2026-09-14, narrowed 2026-09-15)
-One account, one subscription, one usage balance. **The only ways to use the product are the website and MCP**
-(user, 2026-09-15: the Telegram bot and the command-line tool were scrapped; don't build them or other channels):
+### Channels (decided 2026-09-14, narrowed 2026-09-15; MCP replaced by a mobile app 2026-09-15)
+One account, one subscription, one usage balance. **The only ways to use the product are the website and the mobile
+app** (user, 2026-09-15: the Telegram bot, the command-line tool and the **MCP server were scrapped**; don't build
+them or other channels):
 - **Website** (`apps/website`, Next.js): the **only place to pay** (subscriptions) and a full way to use the product
   (submit videos, review clips, schedule, see usage and billing).
-- **MCP server**: use the product from AI assistants. Lives in `apps/mcp` if it needs its own deployable; otherwise
-  mounted inside the backend (FastAPI + official `mcp` SDK). Decide in Phase 8 — default to the backend unless there is
-  a concrete reason to split.
+- **Mobile app** (`apps/mobile`, Flutter, iOS + Android; Phase 8): submit a link or a video from the phone, follow
+  progress, review/edit/approve clips, save or share clips, publish and schedule, see plan and usage (read-only). It
+  calls the FastAPI REST API directly over HTTPS with the Clerk session token as a Bearer token (the website's `/api`
+  proxy is for the browser only). **No purchases in the app** (store in-app purchase rules): plans are managed on the
+  website. No secrets or provider keys in the app.
 
-The backend REST API is the website's backend, not a separate product channel. Channels are thin clients. **Auth,
+**Domain: `ytclipper.xyz`** (user, 2026-09-15). **The backend runs on Railway** (API service + worker service + Railway
+Postgres; media stays on R2). Subdomains are not decided yet (a natural split: website on `ytclipper.xyz`, API on
+`api.ytclipper.xyz` for the app, public clip copies on a media subdomain instead of r2.dev); ask before wiring DNS. The backend REST
+API serves the website and the mobile app; it is not a separate product channel. Channels are thin clients. **Auth,
 subscription checks and usage limits are enforced once, in the backend services** (`jobs.py`, `billing.py`,
 `publishing.py`), never re-implemented per channel.
 
 ### Accounts: Clerk (user decision, 2026-09-15)
 **Use Clerk for everything it offers around accounts** instead of building our own: sign-in/sign-up UI, the user
 database (we store only Clerk user ids as owners, no users/passwords table), sessions and token verification in the
-backend, Clerk Organizations for teams/workspaces, and OAuth sign-in for MCP clients. Clerk app id:
+backend, Clerk Organizations for teams/workspaces, and sign-in in the mobile app (Clerk's Flutter SDK; check its
+status when Phase 8 starts). Clerk app id:
 `app_3JMJIEqTu79eUjLFgFDsRzpNa7h` (always pass `--app` to `clerk init`). Website: `@clerk/nextjs` (`ClerkProvider` inside
 `<body>`, `await auth()`, Next 16 `proxy.ts` matcher includes `'/__clerk/:path*'` after `'/(api|trpc)(.*)'`). Never expose
 `CLERK_SECRET_KEY` to client code; don't read or print env files. Payments stay off; if they're switched on, ask
 whether to use Clerk Billing before choosing a provider. **Built 2026-09-15:** sign-in/up + protected pages, backend
-token verification, per-owner data. Next: MCP with Clerk OAuth.
+token verification, per-owner data. Next: Clerk sign-in in the Flutter app.
 
-Build progress, what's left and lessons learned: @memory.md — **read it before starting work and update it after
-every milestone** (what was done, how it was verified, what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
+### Finding things: graphify first, not the whole build log (user, 2026-09-15)
+To save tokens, **don't read `.claude/memory.md` (or big files) end to end.** Look things up in the graphify map of the
+repo (code, docs, the build log and the spec), then read only the lines it points to:
+```bash
+graphify query "where are posts sent to Buffer?" --budget 1500   # BFS over graphify-out/graph.json
+graphify explain "send_queued"        # one symbol and its neighbours
+graphify path "api.py" "billing.py"   # how two things connect
+graphify affected apps_backend_jobs_update_clip   # what a change would touch (a name in two files needs the id
+                                                  # that `explain` prints)
+```
+(`graphify` = `C:/Users/USER/AppData/Roaming/Python/Python312/Scripts/graphify` if it isn't on PATH; package
+`graphifyy` 0.9.48, Apache-2.0.) The map is local and free: `graphify update .` rebuilds it from the repo root in ~10 s
+without any AI calls (respects `.gitignore`, so `.env`, `pgdata/`, media and dependencies stay out). Git hooks rebuild it
+after every commit and checkout. `graphify-out/` is not committed. When the map can't answer, fall back to a targeted
+Grep, then to the matching `memory.md` section only.
+
+`.claude/memory.md` stays the build log: **update it after every milestone** (what was done, how it was verified,
+what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
 
 ## Working rules
 - **Ponytail (laziest solution that works).** Use the ponytail skill on coding tasks. Climb the ladder: does it need
@@ -39,7 +62,13 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
   never change, no scaffolding "for later". Mark deliberate corner-cutting with a `# ponytail:` comment naming the
   ceiling and upgrade path. Never simplify away validation at trust boundaries, security, or data-loss handling.
 - **Understand before changing.** Read the code a change touches end to end; fix root causes in the shared function.
-- **Every non-trivial piece of logic leaves one runnable check** (plain `assert` scripts, no test frameworks).
+- **Every non-trivial piece of logic leaves one runnable check** (plain `assert` scripts, no test frameworks on the
+  backend and website; the Flutter app uses `flutter test`).
+- **Every feature ends the same way (user, 2026-09-15):** (1) add or extend the tests that prove it works; (2) run all
+  checks for the parts it touches and make sure everything still passes: `test_clipper.py`, `test_jobs.py`, website
+  `next build` + `check.mjs` + `walkthrough.mjs`, and `flutter analyze` + `flutter test` for the app; (3) run
+  `graphify update .` so the map knows the new code; (4) update `memory.md` (and README/DECISIONS/DESIGN when they
+  change). A feature isn't done while a check fails or wasn't run; say which checks were skipped and why.
 - **Never claim something works without running it.** Run tests, run the real thing, look at the output (frames,
   JSON, HTTP responses). Say plainly what was not verified.
 - **Follow `masterprompt.md` phase order** (§45) unless evidence says otherwise; do not build later phases early.
@@ -51,8 +80,9 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
 - **Never trust model output**: schema-validate (pydantic), retry, reject. Timestamps come from the transcript/pass 1,
   never invented. **Spoken caption text comes only from the transcript.**
 - **Business logic lives in backend service modules** (`jobs.py` projects, `billing.py` plans/limits, `publishing.py`
-  Buffer; shared by the REST API, MCP server and worker). Route and tool handlers stay thin and call the same
-  services — no duplicate logic per channel. The website only talks to the backend through its `/api/*` proxy.
+  Buffer; shared by the REST API and the worker). Route handlers stay thin and call the same services — no duplicate
+  logic in the website or the mobile app. The website only talks to the backend through its `/api/*` proxy; the mobile
+  app calls the REST API directly.
 - **Long work never blocks a request**: create a project → return id → worker processes → client polls status.
 - **Cost rules**: existing/cached transcript before paid STT (transcripts cached by source key in Postgres); cheapest
   acceptable model (deepseek-flash) before stronger (deepseek-v4-pro); cache results; temporary storage only; delete
@@ -73,13 +103,13 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
 ## Security rules
 - **The GitHub repo is public** (github.com/HasbiyallahuJafaru/ClipperAi). Never commit `.env`, keys, tokens,
   `pgdata/`, media. Scan staged files for secrets before every commit. Never print key values in output.
-- Secrets only in `apps/backend/.env` (template: `.env.example`); no API keys in the frontend or MCP responses.
+- Secrets only in `apps/backend/.env` (template: `.env.example`); no API keys in the website or the mobile app.
 - Subprocess calls use argument arrays, never shell strings with user input.
 - Sources must pass `jobs.public_url` (http/https, public IPs only) or be `upload:<uuid>` that exists in storage.
 - Every API route requires a verified Clerk session token (`api.signed_in`) and acts for its owner: the active Clerk
   organization id, else the user id. Every service function takes `owner` and filters by it; never add a query that
-  reads or changes projects, plans or posts without it (test_jobs.py checks another account sees nothing). MCP is
-  never anonymous.
+  reads or changes projects, plans or posts without it (test_jobs.py checks another account sees nothing). The mobile
+  app is never anonymous.
 - **Licensing**: no GPL/AGPL code in the product without explicit evaluation (e.g. Ultralytics YOLO and Postiz are
   AGPL — avoid). Prefer MIT/Apache/BSD. Every dependency goes in `DECISIONS.md`.
 

@@ -14,7 +14,7 @@ and write the copy; FFmpeg, OpenCV and libass do the cutting, cropping and capti
 > **Status:** the backend engine, job system and storage layer are built and tested. The website works locally:
 > submit one or many videos, follow progress, review clips, download everything as a ZIP, publish or schedule approved
 > clips through Buffer, spread them over a content calendar, and choose a plan (pricing, checkout, billing, usage
-> limits; payments are switched off, so plans are free for now). The MCP server and accounts are next. See
+> limits; payments are switched off, so plans are free for now). Accounts (Clerk) are built too. The Flutter mobile app is next. See
 > [Status and roadmap](#status-and-roadmap).
 
 ---
@@ -85,11 +85,12 @@ One account, one subscription and one usage balance, reachable two ways:
 | Channel | What it's for | Status |
 |---|---|---|
 | **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Works locally: submit (batch), review, ZIP download, publish/schedule through Buffer, content calendar, pricing/checkout/billing with payments switched off |
-| **MCP server** | Use ClipperAi from AI assistants, e.g. *"take my latest podcast and make 15 clips"*. | Planned (Phase 8) |
+| **Mobile app** (`apps/mobile`, Flutter, iOS + Android) | The product on a phone: share a link or pick a video, follow progress, review and approve clips, save or share them, publish and schedule, see usage. No purchases in the app; plans are managed on the website. | Planned (Phase 8) |
 
 Both are thin clients over the same backend. Sign-in, subscription checks and usage limits are enforced once, in the
 backend, so the rules are identical in both. The backend's REST API is what the website runs on; it isn't offered as a
-separate way to use ClipperAi.
+separate way to use ClipperAi. (An MCP server for AI assistants was planned earlier and has been dropped in favour of
+the mobile app.)
 
 ---
 
@@ -99,10 +100,10 @@ separate way to use ClipperAi.
 flowchart TB
     subgraph Channels
         W[Website]
-        M[MCP server]
+        M[Mobile app<br/>Flutter]
     end
     W -->|server-side proxy| API
-    M -. planned .-> S
+    M -. planned: HTTPS + session token .-> API
     API[REST API<br/>api.py] --> S[Services<br/>jobs.py · billing.py · publishing.py]
     S --> PG[(Postgres<br/>projects · clips · transcripts · subscriptions · publications)]
     S --> BUF[Buffer<br/>posts to social networks]
@@ -120,9 +121,12 @@ flowchart TB
 - **Requests never wait for video work.** Creating a project returns immediately with an id; a separate worker process
   does the processing; clients check the status.
 - **Business logic lives in the services**: `jobs.py` (projects, review, content package), `billing.py` (plans and
-  usage limits) and `publishing.py` (sending approved clips to Buffer). The API, the worker and the future MCP server
-  all call the same functions, so limits are identical everywhere. The website never talks to the backend directly
-  from the browser: its own server forwards `/api/*` requests and adds the key.
+  usage limits) and `publishing.py` (sending approved clips to Buffer). The API and the worker call the same functions, so limits are
+  identical for the website and the mobile app. The website never talks to the backend directly from the browser: its
+  own server forwards `/api/*` requests with the signed-in session. The mobile app will call the API directly with its
+  session token.
+- **Hosting:** the backend (API and worker) runs on Railway with Railway Postgres; media stays on Cloudflare R2. The
+  domain is `ytclipper.xyz`.
 - **Providers are swappable by configuration.** Groq and DeepSeek are both reached through the OpenAI-compatible SDK;
   R2 is reached through the standard S3 API, so any S3-compatible store works.
 
@@ -163,7 +167,7 @@ ClipperAi/
     │   ├── check.mjs       proxy checks against a running site
     │   ├── walkthrough.mjs clicks through every flow in headless Edge
     │   └── .env.example    BACKEND_URL + Clerk keys template
-    └── mcp/                MCP server (Phase 8; may live in the backend instead)
+    └── mobile/             Flutter app for iOS and Android (Phase 8)
 ```
 
 Created locally while running, and never committed: `.env`, `.venv/`, `tmp/` (worker scratch space), `pgdata/` (local
@@ -327,10 +331,31 @@ is selected). Uploads go from the browser straight to storage through the signed
 
 ---
 
+## Finding your way around the code
+
+The repo is mapped with [graphify](https://github.com/Graphify-Labs/graphify) (Apache-2.0), a local knowledge graph of
+the code and docs, so you can ask where things are instead of reading whole files:
+
+```bash
+pip install --user graphifyy
+graphify update .                                   # build or refresh the map (local, no AI calls, ~10 s)
+graphify hook install                               # refresh it automatically after each commit and checkout
+graphify query "where are posts sent to Buffer?"    # search
+graphify explain "send_queued"                      # one function and what it connects to
+```
+
+The map lives in `graphify-out/` and isn't committed.
+
+Every feature is finished the same way: tests that prove it, every relevant check passing (`test_clipper.py`,
+`test_jobs.py`, the website build + `check.mjs` + `walkthrough.mjs`, and `flutter test` for the app), then
+`graphify update .`.
+
+---
+
 ## API reference
 
 This is the backend the website runs on (for development and the website itself; people use ClipperAi through the
-website or MCP). Every request needs `Authorization: Bearer <Clerk session token>` and acts for that account. Bodies
+website or the mobile app). Every request needs `Authorization: Bearer <Clerk session token>` and acts for that account. Bodies
 and responses are JSON. The examples use a shell variable holding a session token: `export TOKEN=...` (a signed-in
 page gets one with `await window.Clerk.session.getToken()`; tokens last about a minute).
 
@@ -720,7 +745,7 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | 5 | Website: product UI, subscriptions and payments, usage | Built locally: batch submit, progress, review, ZIP download, pricing/checkout/billing (payments switched off) |
 | 6 | Publishing through Buffer | ✅ Done: post now, scheduled and unscheduled posts tested through the website against real Buffer, YouTube and R2 |
 | 7 | Content calendar and scheduling | ✅ Done: plan, preview, Schedule all through the worker, calendar list, `calendar.csv`; against real Buffer: one post scheduled and unscheduled through the website, and a 30-post batch (Buffer's request limit not yet tried for real) |
-| 8 | MCP server for AI assistants | Next |
+| 8 | Mobile app (Flutter, iOS + Android) on the same API | Next |
 | 9 | Accounts, plans, usage limits, cost tracking | Partly: plans and monthly limits for one workspace; accounts, real payments and cost tracking planned |
 | 10 | Production hardening and deployment (Railway) | Planned |
 

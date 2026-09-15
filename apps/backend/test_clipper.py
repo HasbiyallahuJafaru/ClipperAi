@@ -102,18 +102,35 @@ with tempfile.TemporaryDirectory() as tmp:
 
 ass = captions([{"word": "Most", "start": 10.0, "end": 10.3}, {"word": "companies", "start": 10.3, "end": 10.9},
                 {"word": "fail.", "start": 11.0, "end": 11.4}, {"word": "{Why?}", "start": 12.5, "end": 12.9},
-                {"word": "outside", "start": 30.0, "end": 30.5}], start=9.9, end=20, hook="The mistake")
+                {"word": "outside", "start": 30.0, "end": 30.5}], start=9.9, end=20)
 events = [line for line in ass.splitlines() if line.startswith("Dialogue")]
-assert events[0] == "Dialogue: 1,0:00:00.00,0:00:03.00,Hook,,0,0,0,,The mistake"
-assert events[1] == "Dialogue: 0,0:00:00.10,0:00:00.40,Caption,,0,0,0,,{\\c&H0000E6FF&}Most{\\r} companies"
-assert events[2] == "Dialogue: 0,0:00:00.40,0:00:01.10,Caption,,0,0,0,,Most {\\c&H0000E6FF&}companies{\\r}", \
+assert "Hook" not in ass, "no opening line is drawn over the start of a clip"
+assert events[0] == "Dialogue: 0,0:00:00.10,0:00:00.40,Caption,,0,0,0,,{\\c&H0000E6FF&}Most{\\r} companies"
+assert events[1] == "Dialogue: 0,0:00:00.40,0:00:01.10,Caption,,0,0,0,,Most {\\c&H0000E6FF&}companies{\\r}", \
     "18-char line limit splits off 'fail.'; group holds until the next one starts (no flicker)"
-assert events[3].split(",")[2] == "0:00:02.00", "before a pause, the last word lingers 0.5s"
-assert events[4].endswith(",{\\c&H0000E6FF&}(Why?){\\r}") and len(events) == 5, "braces escaped; out-of-range word dropped"
+assert events[2].split(",")[2] == "0:00:02.00", "before a pause, the last word lingers 0.5s"
+assert events[3].endswith(",{\\c&H0000E6FF&}(Why?){\\r}") and len(events) == 4, "braces escaped; out-of-range word dropped"
 
 # a face that jitters around 400 then moves to 1400 for good -> exactly two steady shots, cut at the move
 xs = [400, 410, 395, 1400, 405, 400, 1400, 1395, 1410, 1405]
 assert shots(xs, deadzone=120) == [(0, 402.5), (6, 1402.5)], shots(xs, 120)
 assert shots([500.0], 120) == [(0, 500.0)]
+
+# rendering: captions burned in by default, left out when the source already has its own; the caption file either way
+with tempfile.TemporaryDirectory() as tmp:
+    src = Path(tmp) / "talk.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=640x360:d=3", "-f", "lavfi",
+                    "-i", "sine=duration=3", "-shortest", str(src)], check=True)
+    words = [{"word": "HELLO", "start": 0.2, "end": 2.8}]
+    frames = {}
+    for burn in (True, False):
+        out = Path(tmp) / f"clip-{burn}.mp4"
+        clipper.render(src, 0, 3, out, words, burn=burn)
+        assert out.exists() and out.with_suffix(".jpg").exists() and "HELLO" in out.with_suffix(".ass").read_text()
+        frames[burn] = subprocess.run(["ffmpeg", "-v", "error", "-ss", "1", "-i", str(out), "-frames:v", "1", "-f", "rawvideo",
+                                       "-pix_fmt", "gray", "-"], check=True, capture_output=True).stdout
+    changed = sum(a != b for a, b in zip(frames[True], frames[False]))
+    assert changed > 1000, f"burned captions must change the picture ({changed} pixels differ)"
+    assert len(set(frames[False])) <= 3, "without captions the gray test picture stays plain"
 
 print("ok")

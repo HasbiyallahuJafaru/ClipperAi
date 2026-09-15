@@ -111,15 +111,16 @@ def upload(data=b"fake video"):
     return ticket["source"]
 
 
-seen, limits = [], []
+seen, limits, burned = [], [], []
 
 
 def fake_run(behaviour):
     """Stands in for the real pipeline: writes scratch + output files and reports progress like clipper.run."""
     def run(source, out, n, min_len, max_len, progress, load_transcript, save_transcript, work_root, max_seconds,
-            max_clips):
+            max_clips, captions):
         seen.append(Path(source).read_bytes() if Path(source).is_file() else source)
         limits.append((max_seconds, max_clips))
+        burned.append(captions)
         work_root.mkdir(parents=True, exist_ok=True)
         (work_root / "source.mp4").write_bytes(b"downloaded")
         progress("transcribing")
@@ -161,6 +162,7 @@ done = status(p)
 assert done["status"] == "completed" and done["message"] == "Ready." and done["source_key"] == "Youtube-x"
 assert seen[-1] == b"fake video", "the worker must process the uploaded bytes"
 assert limits[-1] == (3000 * 60, 500), "the worker passes the plan's remaining minutes and clips to the engine"
+assert burned[-1] is True, "captions are burned in unless the project turns them off"
 clip = done["clips"][0]
 assert clip["posts"]["x"] == "post" and http("GET", clip["video_url"]) == b"clip mp4"
 assert http("GET", clip["captions_url"]) == b"clip ass" and http("GET", clip["thumbnail_url"]) == b"clip jpg"
@@ -177,6 +179,7 @@ posts = clip["posts"] | {"x": "edited post"}
 edited = jobs.update_clip(ME, p["id"], 1, jobs.ClipEdit(review="approved", title="Better title", posts=posts, hashtags=[]))
 assert edited["review"] == "approved" and edited["title"] == "Better title" and edited["hashtags"] == []
 assert edited["posts"]["x"] == "edited post" and edited["description"] == "d" and edited["hook"] == "h"
+assert jobs.update_clip(ME, p["id"], 1, jobs.ClipEdit(hook="A better opening line"))["hook"] == "A better opening line"
 assert jobs.update_clip(ME, p["id"], 1, jobs.ClipEdit(review="rejected"))["title"] == "Better title"
 assert status(p)["clips"][0]["review"] == "rejected"
 assert jobs.update_clip(ME, p["id"], 99, jobs.ClipEdit(review="approved")) is None
@@ -203,7 +206,7 @@ assert package.read("videos/clip01.mp4") == b"clip mp4" and package.read("thumbn
 metadata = json.loads(package.read("metadata/clips.json"))
 assert metadata[0]["title"] == "Better title" and metadata[0]["posts"]["x"] == "edited post"
 row = next(csv.DictReader(io.StringIO(package.read("metadata/clips.csv").decode("utf-8-sig"))))
-assert row["x"] == "edited post" and row["review"] == "approved" and row["hook"] == "h"
+assert row["x"] == "edited post" and row["review"] == "approved" and row["hook"] == "A better opening line"
 
 # expired files: no links handed out, nothing to package
 with db.connect() as c:
@@ -636,6 +639,41 @@ for row in publishing.publications(ME, pid)["publications"]:
 assert len(in_buffer) == 5 and not in_buffer & buffer.posts.keys()
 assert storage.client().list_objects_v2(Bucket="clips-public").get("KeyCount") == 0
 assert jobs.delete_project(ME, pid)["id"] == pid
+
+# progress bar and thumbnail on every project
+assert jobs.percent("queued", "") == 0 and jobs.percent("completed", "") == 100
+assert jobs.percent("downloading", "50%") == 14 and jobs.percent("rendering", "clip 1 of 5") == 60
+assert jobs.percent("rendering", "clip 5 of 5") == 88 and jobs.percent("failed", "no speech") is None
+steps = [jobs.percent(*s) for s in [("queued", ""), ("downloading", "0%"), ("downloading", "100%"), ("transcribing", ""),
+                                    ("analyzing", ""), ("rendering", "clip 2 of 3"), ("packaging", "3 clips"), ("completed", "")]]
+assert steps == sorted(steps), steps  # never goes backwards
+for link in ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ?t=3",
+             "https://youtube.com/shorts/dQw4w9WgXcQ", "https://www.youtube.com/watch?feature=share&v=dQw4w9WgXcQ"):
+    assert jobs.thumbnail(link) == "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", link
+assert jobs.thumbnail("upload:abc") is None and jobs.thumbnail("https://vimeo.com/123") is None
+shown = jobs.present({"status": "rendering", "detail": "clip 2 of 4", "error": None, "source": "https://youtu.be/dQw4w9WgXcQ"})
+assert shown["progress"] == 69 and shown["thumbnail"].endswith("/dQw4w9WgXcQ/hqdefault.jpg")
+
+# sign-in: website tokens must name one of our sites, the mobile app's native tokens name none
+import api  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+
+os.environ.setdefault("CLERK_SECRET_KEY", "sk_test_unused")
+
+
+def owner_for(signed_in, payload):
+    api.authenticate_request = lambda *_: SimpleNamespace(is_signed_in=signed_in, payload=payload)
+    try:
+        return api.signed_in(None)
+    except HTTPException as e:
+        return e.status_code
+
+
+assert owner_for(True, {"sub": "user_a", "azp": "http://localhost:3000"}) == "user_a"
+assert owner_for(True, {"sub": "user_a", "org_id": "org_b"}) == "org_b"  # the app: no azp
+assert owner_for(True, {"sub": "user_a", "azp": "https://evil.example"}) == 401
+assert owner_for(False, {}) == 401
 
 s3.stop()
 print("ok")

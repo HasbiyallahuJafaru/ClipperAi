@@ -33,9 +33,7 @@ PHASE 0 — BUILD AUDIT
    ├── Ayrshare
    └── other viable providers
 
-8. MCP
-   ├── official Python SDK
-   └── existing MCP implementations
+8. MCP (scrapped 2026-09-15: replaced by a Flutter mobile app)
 
 9. Content calendar
    ├── existing open-source components

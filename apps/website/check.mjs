@@ -20,9 +20,18 @@ assert.equal(response.status, 403, "other sites must not be able to act through 
 
 // plain requests: with browser headers a Clerk development instance first bounces every page through its handshake
 const page = (path) => call(path);
-for (const path of ["/", "/how-it-works", "/features", "/pricing", "/faq", "/sign-in", "/sign-up"]) {
+for (const path of ["/", "/how-it-works", "/features", "/pricing", "/faq", "/sign-in", "/sign-up", "/compare",
+                    "/compare/opusclip", "/compare/klap", "/compare/vizard", "/compare/submagic", "/tools/youtube-clip-maker",
+                    "/tools/youtube-shorts-maker", "/tools/podcast-clip-generator", "/robots.txt", "/sitemap.xml"]) {
   assert.equal((await page(path)).status, 200, path);
 }
+// search engines: every public page in the sitemap, signed-in pages kept out, a share image on every page
+const sitemap = await (await page("/sitemap.xml")).text();
+for (const path of ["/pricing", "/compare/opusclip", "/tools/youtube-clip-maker"]) assert.ok(sitemap.includes(`${path}</loc>`), `sitemap: ${path}`);
+assert.match(await (await page("/robots.txt")).text(), /Disallow: \/dashboard/);
+const home = await (await page("/")).text();
+for (const tag of ['property="og:image"', 'name="twitter:card"', 'rel="canonical"', "application/ld+json"]) assert.ok(home.includes(tag), `home: ${tag}`);
+assert.equal((await page("/compare/not-a-competitor")).status, 404);
 for (const path of ["/dashboard", "/projects/new", `/projects/${missing}`, `/projects/${missing}/calendar`,
                     "/checkout?plan=pro", "/settings/billing", "/settings/integrations"]) {
   response = await page(path);

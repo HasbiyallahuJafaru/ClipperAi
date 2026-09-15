@@ -31,11 +31,13 @@ REQUIRED = ("CLERK_SECRET_KEY", "S3_ENDPOINT", "S3_ACCESS_KEY_ID", "S3_SECRET_AC
 
 def signed_in(request: Request) -> str:
     """The owner a request acts for: the Clerk organization active in the session, else the Clerk user. 401 unless
-    the bearer token is a valid Clerk session token issued to one of this deployment's sites."""
+    the bearer token is a valid Clerk session token from one of this deployment's sites or the mobile app."""
     state = authenticate_request(request, AuthenticateRequestOptions(
-        secret_key=os.environ["CLERK_SECRET_KEY"], accepts_token=["session_token"],
-        authorized_parties=os.environ.get("CLERK_AUTHORIZED_PARTIES", "http://127.0.0.1:3000,http://localhost:3000").split(",")))
-    if not state.is_signed_in:
+        secret_key=os.environ["CLERK_SECRET_KEY"], accepts_token=["session_token"]))
+    sites = os.environ.get("CLERK_AUTHORIZED_PARTIES", "http://127.0.0.1:3000,http://localhost:3000").split(",")
+    # Browser tokens name their site (azp) and must be ours; the mobile app's native tokens carry none. The SDK's own
+    # authorized_parties check would reject the app, so the site is checked here.
+    if not state.is_signed_in or state.payload.get("azp", sites[0]) not in sites:
         raise HTTPException(401, "Sign in to continue.")
     return state.payload.get("org_id") or state.payload["sub"]
 
@@ -51,7 +53,7 @@ async def lifespan(_):
     yield
 
 
-app = FastAPI(title="ClipperAI", lifespan=lifespan)
+app = FastAPI(title="YT-Clipper", lifespan=lifespan)
 
 
 @app.exception_handler(billing.LimitError)
@@ -62,6 +64,11 @@ def limit_reached(_, error: billing.LimitError):
 @app.exception_handler(publishing.PublishError)
 def cannot_publish(_, error: publishing.PublishError):
     return JSONResponse({"detail": str(error)}, status_code=error.status)
+
+
+@app.get("/health")
+def health():  # Railway's healthcheck: no sign-in, no data; answers once startup (env check + migrations) is done
+    return {"ok": True}
 
 
 def found(project: dict | None) -> dict:

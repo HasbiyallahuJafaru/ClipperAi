@@ -48,7 +48,6 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,Montserrat,88,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,-1,0,0,0,100,100,0,0,1,7,3,2,80,80,560,1
-Style: Hook,Montserrat,60,&H00FFFFFF,&H00FFFFFF,&H22000000,&H00000000,-1,0,0,0,100,100,0,0,3,22,0,8,100,100,260,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -124,9 +123,9 @@ def duration_of(media: Path) -> float:
                                  str(media)], capture_output=True, text=True, check=True).stdout)
 
 
-def acquire(source: str, root: Path) -> tuple[Path, Path]:
+def acquire(source: str, root: Path, progress=lambda percent: None) -> tuple[Path, Path]:
     """Return (video, work dir). The work dir under `root` is named by content id (Youtube-<id>, file hash): that name
-    is the transcript cache key."""
+    is the transcript cache key. `progress(percent)` is called as a link downloads, in 5% steps."""
     if Path(source).is_file():
         with open(source, "rb") as f:
             work = root / hashlib.file_digest(f, "sha256").hexdigest()[:16]
@@ -147,9 +146,26 @@ def acquire(source: str, root: Path) -> tuple[Path, Path]:
         "quiet": True,
         "noprogress": True,
         "no_warnings": True,
+        "progress_hooks": [lambda d: reported(d.get("downloaded_bytes"), d.get("total_bytes") or d.get("total_bytes_estimate"))],
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        video = Path(ydl.extract_info(source)["requested_downloads"][0]["filepath"])
+    if os.environ.get("YTDLP_PROXY"):  # YouTube blocks most cloud servers (Railway): route downloads through a proxy
+        opts["proxy"] = os.environ["YTDLP_PROXY"]
+    last = -5
+
+    def reported(done, total):  # ponytail: percent of the current file; video and audio streams each count 0-100
+        nonlocal last
+        if done and total and (percent := min(100, int(done * 100 / total))) >= last + 5:
+            last = percent
+            progress(percent)
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            video = Path(ydl.extract_info(source)["requested_downloads"][0]["filepath"])
+    except yt_dlp.utils.DownloadError as e:
+        if "not a bot" in str(e) or "Sign in to confirm" in str(e):
+            raise PermanentError("YouTube blocked our server from downloading this video. Upload the video file"
+                                 " instead, or try again later.") from e
+        raise
     return video, video.parent
 
 
@@ -314,8 +330,8 @@ def ass_escape(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")")
 
 
-def captions(words: list[dict], start: float, end: float, hook: str = "") -> str:
-    """ASS subtitles from the real transcript words: short groups, the spoken word highlighted, hook up top."""
+def captions(words: list[dict], start: float, end: float) -> str:
+    """ASS subtitles from the real transcript words: short groups, the spoken word highlighted."""
     def ts(t):
         cs = max(0, round((t - start) * 100))
         return f"{cs // 360000}:{cs // 6000 % 60:02}:{cs // 100 % 60:02}.{cs % 100:02}"
@@ -330,8 +346,6 @@ def captions(words: list[dict], start: float, end: float, hook: str = "") -> str
             groups.append([w])
 
     lines = [ASS_HEADER]
-    if hook:
-        lines.append(f"Dialogue: 1,{ts(start)},{ts(start + 3)},Hook,,0,0,0,,{ass_escape(hook)}")
     for gi, g in enumerate(groups):
         next_start = groups[gi + 1][0]["start"] if gi + 1 < len(groups) else end
         for i, w in enumerate(g):
@@ -341,30 +355,33 @@ def captions(words: list[dict], start: float, end: float, hook: str = "") -> str
     return "\n".join(lines) + "\n"
 
 
-def render(video: Path, start: float, end: float, out: Path, words: list[dict], hook: str):
-    """Write out (mp4), its .ass captions and a .jpg cover."""
+def render(video: Path, start: float, end: float, out: Path, words: list[dict], burn: bool = True):
+    """Write out (mp4), its .ass captions and a .jpg cover. `burn`: draw the captions into the video (off when the
+    source already has its own); the .ass file is written either way, for other editors."""
     out = out.resolve()
-    out.with_suffix(".ass").write_text(captions(words, start, end, hook), encoding="utf-8")
+    out.with_suffix(".ass").write_text(captions(words, start, end), encoding="utf-8")
     # cwd = output dir and relative paths, so filter args carry no Windows drive colons (they break filter parsing)
     fonts = Path(os.path.relpath(FONTS, out.parent)).as_posix()
+    burned = f",ass={out.stem}.ass:fontsdir={fonts}" if burn else ""
     ffmpeg("-ss", f"{start:.3f}", "-i", str(video.resolve()), "-t", f"{end - start:.3f}",
-           "-vf", f"{crop_filter(video, start, end)},scale=1080:1920,setsar=1,ass={out.stem}.ass:fontsdir={fonts}",
+           "-vf", f"{crop_filter(video, start, end)},scale=1080:1920,setsar=1{burned}",
            "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out.name, cwd=out.parent)
-    # cover = frame at 1 s: speaker framed and the hook already burned in as the typography
+    # cover = frame at 1 s: the speaker already framed
     ffmpeg("-ss", "1", "-i", out.name, "-frames:v", "1", "-q:v", "3", out.with_suffix(".jpg").name, cwd=out.parent)
 
 
 def run(source: str, out: Path, n: int | None = None, min_len: float = 30, max_len: float = 60, *,
         progress, load_transcript, save_transcript, work_root: Path,
-        max_seconds: float | None = None, max_clips: int | None = None) -> tuple[str, Path, list[Clip]]:
+        max_seconds: float | None = None, max_clips: int | None = None, captions: bool = True
+        ) -> tuple[str, Path, list[Clip]]:
     """The whole pipeline. `progress(stage, detail)` is called at every step (it may raise to cancel); transcripts
     are cached by source key through load/save; downloads go under `work_root`. `max_seconds` / `max_clips` cap the
-    source length and clip count (plan allowances), checked before anything is paid for.
-    Returns (source key, out dir, clips)."""
+    source length and clip count (plan allowances), checked before anything is paid for. `captions`: burn captions
+    into the clips (the caption files are made either way). Returns (source key, out dir, clips)."""
     progress("downloading")
-    video, work = acquire(source, work_root)
+    video, work = acquire(source, work_root, lambda percent: progress("downloading", f"{percent}%"))
     if max_seconds is not None and (seconds := duration_of(video)) > max_seconds:
         raise PermanentError(f"this video is {seconds / 60:.0f} minutes long, but only {max_seconds / 60:.0f} minutes"
                              " of video are left in your plan this month")
@@ -385,7 +402,7 @@ def run(source: str, out: Path, n: int | None = None, min_len: float = 30, max_l
     for i, clip in enumerate(clips, 1):
         progress("rendering", f"clip {i} of {len(clips)}")
         clip.start, clip.end = snap(clip.start, clip.end, transcript["words"])
-        render(video, max(0, clip.start - 0.1), clip.end + 0.2, out / f"clip{i:02}.mp4", transcript["words"], clip.hook)
+        render(video, max(0, clip.start - 0.1), clip.end + 0.2, out / f"clip{i:02}.mp4", transcript["words"], captions)
     (out / "clips.json").write_text(json.dumps([c.model_dump() for c in clips], indent=2, ensure_ascii=False),
                                     encoding="utf-8")
     return key, out, clips

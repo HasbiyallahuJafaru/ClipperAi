@@ -1,0 +1,10 @@
+.env
+.venv
+pgdata
+out
+work
+tmp
+__pycache__
+test_*.py
+dev*.py
+fake_buffer.py

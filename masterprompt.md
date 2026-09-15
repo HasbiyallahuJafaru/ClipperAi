@@ -1,5 +1,5 @@
 # MASTER BUILD PROMPT
-## AI Video Content Repurposing, Clipping, Scheduling & MCP Platform
+## AI Video Content Repurposing, Clipping, Scheduling & Publishing Platform (Web + Mobile)
 
 You are building a production-oriented SaaS application that turns long-form video into large quantities of polished, short-form, platform-ready content.
 
@@ -45,7 +45,7 @@ The system should then:
 16. Allow the user to preview and approve the results.
 17. Create a content calendar.
 18. Allow publishing through a third-party publishing provider such as Buffer.
-19. Expose the same functionality through MCP so an AI assistant can operate the platform programmatically.
+19. Offer the same functionality in a Flutter mobile app (iOS and Android) that uses the same backend.
 
 The product should eventually allow a user to say something equivalent to:
 
@@ -226,12 +226,11 @@ External Providers / Infrastructure
 
 The same application services must be usable by:
 
-- Next.js API requests
-- MCP tools
+- the website (Next.js, through its API proxy)
+- the mobile app (Flutter, calling the REST API directly)
 - background workers
-- future API clients
 
-Do not duplicate business logic between REST and MCP.
+Do not duplicate business logic between the website and the mobile app.
 
 ---
 
@@ -274,7 +273,6 @@ social_posts
 content_calendar
 usage_records
 provider_usage
-mcp_connections
 ```
 
 Use migrations.
@@ -847,120 +845,81 @@ The UX should not force users to configure storage before experiencing the produ
 
 ---
 
-# 24. MCP INTEGRATION
+# 24. MOBILE APP (FLUTTER)
 
-Implement an MCP server using the official Python MCP SDK.
+Build a native mobile app with Flutter in `apps/mobile` (one codebase for iOS and Android).
 
-Use:
+The website and the mobile app are the only two ways to use the product. One account, one subscription and one usage balance work in both.
 
-**Streamable HTTP**
+Do not create a separate application/business-logic system for mobile.
 
-for the deployed server.
-
-Example:
-
-```text
-https://api.yourdomain.com/mcp
-```
-
-Do not create a separate application/business-logic system for MCP.
-
-MCP calls the same services used by the web UI.
+The app calls the same FastAPI REST API the website uses, hosted on Railway. Accounts, plans, limits and publishing rules are enforced once, in the backend services.
 
 Architecture:
 
 ```text
-Next.js
-   │
-   ▼
-FastAPI REST/API
-   │
-   ▼
+Next.js website        Flutter app
+   │  (API proxy)          │  (HTTPS, Bearer token)
+   └──────────┬────────────┘
+              ▼
+FastAPI REST API (Railway)
+              │
+              ▼
 Shared application services
-   ▲
-   │
-MCP server
-   ▲
-   │
-Claude / AI client
+              │
+              ▼
+Workers · PostgreSQL · R2 storage · providers
 ```
 
 ---
 
-# 25. MCP TOOLS
+# 25. MOBILE APP SCOPE
 
-Prefer high-level tools.
-
-Potential tools:
+First version:
 
 ```text
-analyze_video
-find_best_clips
-create_clip
-create_clip_batch
-repurpose_video
-generate_content_package
-create_content_calendar
-schedule_content
-get_project_status
-get_clip_status
-list_projects
+sign in / sign up (same accounts as the website)
+new project: paste a link, share a link into the app, or pick a video from the phone
+upload with progress, straight to storage through a signed upload link
+projects list with live processing status
+clip review: play, approve, reject, edit title/description/hashtags/posts, copy posts
+save a clip to the phone's gallery or share it to another app
+publish now or schedule through Buffer, calendar list
+current plan and this month's usage (read-only)
 ```
 
-Do not expose dozens of low-level FFmpeg operations to the AI.
-
-The AI should be able to say:
+Later:
 
 ```text
-repurpose_video(...)
+push notifications when a project finishes or a post fails
+uploads that continue in the background
+offline access to saved clips
 ```
 
-and the backend handles:
+Rules:
 
-```text
-download
-transcription
-analysis
-clip selection
-rendering
-captions
-metadata
-packaging
-```
-
-internally.
+- large videos never pass through the API; they go to storage with a signed upload link
+- clips play and download from signed links
+- the app never waits on processing: create project, get id, poll (or be notified)
+- the app stays a thin client: no clip, billing or publishing logic of its own
 
 ---
 
-# 26. MCP AUTHENTICATION
+# 26. MOBILE AUTHENTICATION AND PAYMENTS
 
-Never expose MCP anonymously.
+Never allow anonymous use of the app.
 
-Use authenticated access.
+Sign in through the same account system as the website. The app sends the account's session token as a Bearer token and the backend verifies it exactly as it does for the website, acting for that user or organization.
 
-Associate MCP credentials with:
+Payments happen only on the website. Do not sell subscriptions inside the app (app store in-app purchase rules); the app shows the plan and usage and points people to the website to manage it. Check current Apple and Google rules before adding any purchase link.
 
-- user
-- workspace
-- permissions
-- subscription
-- usage limits
-
-Implement:
-
-- bearer tokens or appropriate OAuth
-- token rotation
-- expiration where appropriate
-- rate limiting
-- audit logging
-
-Never expose provider API keys to the MCP client.
+Never put provider API keys or secrets in the app.
 
 ---
 
 # 27. LONG-RUNNING JOBS
 
-Never make an MCP or HTTP request wait for a long video processing task.
+Never make an app or HTTP request wait for a long video processing task.
 
 Example:
 
@@ -1198,7 +1157,6 @@ Possible initial plans:
 - up to 15 source videos
 - approximately 15 hours processing
 - approximately 150 clips
-- MCP
 - automated publishing
 - Buffer integration
 - batch processing
@@ -1210,7 +1168,6 @@ Possible initial plans:
 - approximately 500 clips
 - teams/workspaces
 - brand presets
-- MCP
 - automated publishing
 - API access
 - higher concurrency
@@ -1458,8 +1415,6 @@ Minimum:
     Usage/cost limits
 ```
 
-MCP configuration should eventually have its own settings section.
-
 ---
 
 # 40. CLIP REVIEW UI
@@ -1700,9 +1655,9 @@ Add scheduling and batch publishing.
 
 ---
 
-## Phase 8 — MCP
+## Phase 8 — Mobile app (Flutter)
 
-Expose high-level tools through Streamable HTTP.
+Build the Flutter app in `apps/mobile` on the existing REST API: sign in, submit, review, publish and schedule, usage.
 
 ---
 
@@ -1832,17 +1787,17 @@ user sees publishing status
 And this must also work:
 
 ```text
-Claude / MCP client
+user opens the mobile app
  ↓
-repurpose_video()
+shares a video link or picks a video from the phone
  ↓
 job created
  ↓
-processing
+processing (the app can be closed)
  ↓
-status queried
+user reviews and approves clips on the phone
  ↓
-content package completed
+clips published, scheduled or saved to the phone
 ```
 
 ---
@@ -1945,24 +1900,21 @@ Prefer a modular monolith initially.
 The preferred initial architecture is:
 
 ```text
-                    ┌─────────────────┐
-                    │     Next.js     │
-                    │    Frontend     │
-                    └────────┬────────┘
-                             │
-                             ▼
+        ┌─────────────────┐   ┌─────────────────┐
+        │     Next.js     │   │   Flutter app   │
+        │     website     │   │  (iOS/Android)  │
+        └────────┬────────┘   └────────┬────────┘
+                 └──────────┬──────────┘
+                            ▼
                     ┌─────────────────┐
                     │    FastAPI      │
-                    │   Application   │
+                    │ (Railway)       │
                     └────────┬────────┘
                              │
-              ┌──────────────┼──────────────┐
-              │              │              │
-              ▼              ▼              ▼
-          PostgreSQL       Workers         MCP
-              │              │              │
-              │              │              ▼
-              │              │         AI Clients
+              ┌──────────────┤
+              │              │
+              ▼              ▼
+          PostgreSQL       Workers
               │              │
               │       ┌──────┼─────────┐
               │       │      │         │
@@ -2058,7 +2010,6 @@ The user should not need to understand:
 - LLMs
 - queues
 - workers
-- MCP
 - OAuth
 - social APIs
 

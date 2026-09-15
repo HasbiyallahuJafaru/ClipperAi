@@ -6,10 +6,11 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
 ## At a glance
 - **Built:** engine, jobs/worker, R2 storage, website (submit, review, ZIP, pricing/billing with payments off),
   publishing through Buffer, content calendar, **Clerk accounts (sign-in/up, protected pages, backend token checks,
-  every project/plan/post owned by a Clerk org or user)**. Channels: **website + MCP only**.
+  every project/plan/post owned by a Clerk org or user)**. Channels: **website + Flutter mobile app only** (MCP
+  scrapped 2026-09-15).
 - **Pushed:** everything, incl. Clerk accounts + Next 16.3.5 patch (2026-09-15, commit "Accounts with Clerk...").
-- **Website redesign done and pushed** (bf42176, 2026-09-15, see Done). **Next:** Phase 8 MCP server with
-  Clerk OAuth → per-account publishing connection → Phase 9 cost tracking (+ payments when asked) → Phase 10 deploy +
+- **Website redesign done and pushed** (bf42176 + serif heading accent 5f7e3af, 2026-09-15, see Done). **Next:**
+  Phase 8 **Flutter mobile app** in `apps/mobile` (backend on Railway) → per-account publishing connection → Phase 9 cost tracking (+ payments when asked) → Phase 10 deploy +
   hardening. Pricing proposal waiting on the user (see Done: pricing report).
 - **Not proven on real services:** a full project end to end on real R2 (Avast blocks it here), Instagram posting,
   recovery from a real Buffer 429, a real person signing up through Clerk in a normal browser.
@@ -19,7 +20,7 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
 ### Phase 0 — Research (2026-09-14)
 - `DECISIONS.md`: component/license/cost table. Key picks: yt-dlp, Groq Whisper turbo ($0.04/audio-hr), DeepSeek
   (`deepseek-flash`, `deepseek-v4-pro`, OpenAI-compatible), FFmpeg CLI, OpenCV + YuNet face model (MIT), hand-written
-  ASS captions, boto3 → R2, Buffer GraphQL API, official `mcp` SDK, Postgres queue.
+  ASS captions, boto3 → R2, Buffer GraphQL API, official `mcp` SDK (MCP later scrapped), Postgres queue.
 - Dropped: xAI/Grok STT (no key), MediaPipe (OpenCV already needed), youtube-transcript-api / YouTube auto-captions
   (no punctuation / no word timing; revisit when STT spend matters).
 
@@ -269,7 +270,7 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
   DeepSeek tokens per video-hour: flash 18.2k in / 0.8k out, v4-pro 6.7k in / 3.7k out (≈ $0.03 peak).
 - Unit cost ≈ **$0.107 per source video-hour** (STT $0.04, LLM $0.03, Railway compute $0.014, R2 $0.003, egress to R2
   + one ZIP $0.02); plan with $0.16. YouTube via residential proxy adds $0.20–5.00/h depending on download approach.
-- Proposed (not decided): Free 60 min (watermark, sign-in) · Starter $12/6 h · Creator $24/20 h (incl. MCP) · Agency
+- Proposed (not decided): Free 60 min (watermark, sign-in) · Starter $12/6 h · Creator $24/20 h (incl. MCP, now scrapped) · Agency
   $59/60 h; no clip caps; annual = 2 months free; extra hours $1.50. Margins ~78–83% at full use, ~88% at 40% use.
   Alternative: $29 for 30 h. Current `billing.py` plans unchanged until the user decides.
 - Capacity: 1 h video ≈ 8 min on 8 vCPU; ~11 video-hours/hour per replica (2 jobs). Launch blockers found: Groq free
@@ -335,6 +336,19 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
 - Not done: the skill's separate finish-reviewer/documenter agents and PRODUCT.md (DESIGN.md written by hand; product
   truth stays in CLAUDE.md/masterprompt.md); real clip frames; checking in a real (non-headless) browser.
 
+### MCP scrapped, Flutter app planned, graphify, domain (2026-09-15, user decisions)
+- MCP server scrapped; Phase 8 is now a **Flutter mobile app** in `apps/mobile` (user created the folder and removed
+  `apps/mcp`). Backend on **Railway**; domain **`ytclipper.xyz`**. Docs updated: CLAUDE.md, masterprompt.md (§24–26
+  mobile app, Phase 8, architecture, flows), README, DECISIONS (mobile, scrapped MCP, hosting, graphify), handover,
+  phase0, this file. Flutter 3.47.1 / Dart 3.13.1 already installed.
+- **graphify** (`graphifyy` 0.9.48, pip --user; CLI at `C:/Users/USER/AppData/Roaming/Python/Python312/Scripts/graphify`):
+  `graphify update .` built 65 files → 687 nodes / 1,119 edges in ~7 s (code parsed locally, no AI calls). Checked: no
+  `.env`/pgdata/media/dependencies in the map; `query`, `explain`, `path` answer correctly; `affected` needs a node id
+  when a name exists in two files. Git hooks installed (post-commit, post-checkout rebuild); `graphify-out/` added to
+  `.gitignore`; removed the `.gitattributes` merge rule it created (output isn't committed). CLAUDE.md no longer
+  auto-imports this file (`@memory.md` removed): look things up with graphify, read only the matching section.
+- New rule: every feature ends with tests + all relevant checks passing + `graphify update .` + memory update.
+
 ### Repo (2026-09-14)
 - Pushed to https://github.com/HasbiyallahuJafaru/ClipperAi (public, `main`, first commit 402473e) with README,
   `.env.example`, description and topics. Layout: `apps/backend`, `apps/website` (empty), `apps/mcp` (empty).
@@ -344,6 +358,79 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
 - Third push (2026-09-14, end of session 2): everything in Phase 5 + billing above, `dev.py`, the `db.py` start lock,
   `check.mjs`, `walkthrough.mjs` + `dev_fixture.py`, updated README/DECISIONS/CLAUDE.md/memory/handover. The user
   clears the session after this push and starts Phase 6 in a new one (start from `handover.md`).
+
+### Session 6 (2026-09-15): Phase 8 started, Railway + Vercel production checks
+- **Decisions (user):** app sign-in with `clerk_flutter` beta; **Android first** (iOS code kept, no build route yet);
+  app name **YT Clipper**, id **`xyz.ytclipper.app`**; **deploy the backend to Railway before trying the app**; the app
+  follows the website's UI.
+- **Backend:** `api.signed_in` now accepts Clerk tokens without `azp` (native app) and still rejects browser tokens from
+  other sites (the SDK's `authorized_parties` rejected the app); check at the end of `test_jobs.py`. `GET /health`
+  (no sign-in). `Dockerfile` (python:3.12-slim + ffmpeg + nodejs, non-root, proxy headers; worker via
+  `START_COMMAND=python jobs.py`), `.dockerignore`, `railway.json` (Dockerfile builder, restart on failure),
+  requirements pinned except yt-dlp.
+- **Railway project `ytclipper`** (id 2f4eb11d-5b9f-468a-8139-27a52ac8c38c, env production): Postgres, `api`, `worker`.
+  Set: `DATABASE_URL=${{Postgres.DATABASE_URL}}` on both, `START_COMMAND` on worker, `CLERK_AUTHORIZED_PARTIES` on api
+  (`http://localhost:3000,https://ytclipper.xyz`, add the Vercel URL). Both images build and start; both **crash only
+  because the secrets aren't set** (user to copy them; a scratchpad script `railway_env.py` does it without printing).
+  **No public domain yet**: `railway domain --service api` was blocked by the permission check (user runs it).
+- **Vercel project `website`** (root `apps/website`, https://website-pearl-seven-93.vercel.app): every page answered
+  **500 because the project has no environment variables** (Clerk keys, `BACKEND_URL`). Code is fine for Vercel.
+  Added security headers + `poweredByHeader: false` in `next.config.ts` (verified locally on `npm run start`).
+- **Mobile app `apps/mobile`** (Flutter 3.47): `lib/main.dart` (website tokens as theme, Clerk themed, sign-in on the
+  sky with Clerk's card, Logo, serif-accent Heading), `lib/api.dart` (Bearer token client, readable errors incl.
+  offline/timeout, streamed upload with progress, release builds require `API_URL` + `CLERK_PUBLISHABLE_KEY`
+  dart-defines), `lib/screens.dart` (projects list with 3 s polling, new project by link or phone video, project page
+  with progress/cancel, clip cards: play, approve/reject, save or share, copy posts; plan and usage read-only, no
+  purchases). Release signing from `android/key.properties` (gitignored), else debug key. `flutter analyze` clean,
+  `flutter test` 7 passing (client, errors, upload, labels, projects list, clip approve + posts).
+- **Not verified:** the app on an emulator/phone and a real Clerk sign-in from it (no emulator, SDK licences not
+  accepted, and Gradle downloads fail behind Avast: Java needs `JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=Windows-ROOT`,
+  the user stopped that build); `walkthrough.mjs` (port 8000 held by an existing backend of unknown version).
+- **Next:** publish now/schedule + calendar list + clip editing in the app; run it on an emulator against Railway.
+- **Later in session 6 (2026-09-15):** secrets copied to Railway (api + worker, 11 each, names checked) and Vercel
+  production (7 website keys; `BACKEND_URL=https://api-production-e0fc.up.railway.app`, `BACKEND_API_KEY` dropped).
+  API domain created; `CLERK_AUTHORIZED_PARTIES` includes the Vercel URL. Both Railway services run; `/health` 200.
+  **Vercel:** project is Git-linked (GitHub `main`), so website code only deploys on push; Deployment Protection is
+  `all_except_custom_domains`, which puts the production `.vercel.app` URL behind Vercel login (changing it was blocked
+  by the permission check: user switches it to "Only Preview Deployments" or adds `ytclipper.xyz`). A manual
+  `vercel alias set` was needed after `vercel redeploy` left the alias on DEPLOYMENT_NOT_FOUND.
+- **YouTube blocks Railway's IPs** ("Sign in to confirm you're not a bot"): now a PermanentError with a readable message
+  (no retries); `YTDLP_PROXY` env routes yt-dlp through a proxy (residential proxy = the real fix, user to choose).
+- **Progress + thumbnail (user request):** `jobs.present` adds `progress` (0-100 from stage + detail: download "37%"
+  from yt-dlp hooks in 5% steps, "clip i of n") and `thumbnail` (YouTube links only, i.ytimg.com). Website: `ProgressBar`
+  + `ClipLoading` (picture in a 9:16 frame, colour fills from the bottom) on the project page, thumbnail + bar in the
+  projects list. App: same (`progressBar`, `ClipLoading`), failures show `detail`, never the raw `error`. Checks:
+  test_jobs + test_clipper ok, next build ok, flutter analyze clean, flutter test 9 passing. Backend deployed with
+  `railway up`; website changes need a push.
+- **Rename + SEO (user, 2026-09-15):** brand is **YT-Clipper** everywhere user-facing (website, backend messages, app
+  label/texts); repo, buckets and code names unchanged. OpenSEO project `YT-Clipper` (id edf5c12e-8d6c-4e9e-8d45-fe2bba23c9ec,
+  US) holds the competitor list, positioning and research log. Findings: opus.pro leads (~201k visits, brand 90.5k/mo);
+  wayin.ai/choppity.com win transactional terms with /tools/ pages; winnable: youtube clip maker 1.3k KD8, youtube
+  shorts maker 1.3k KD15, clip youtube video 2.9k KD15, opus clip alternative 390 KD0, opus clip pricing 880 KD12.
+  Built: `app/site.tsx` (SITE from SITE_URL / VERCEL_PROJECT_PRODUCTION_URL, JsonLd), root metadata (title template,
+  canonical, OG/Twitter), `opengraph-image.jpg`/`twitter-image.jpg` (user's urlimg.png, 145 KB; its logo reads "YT
+  Clipper"), `robots.ts`, `sitemap.ts` (13 URLs), `/compare` + `/compare/{opusclip,klap,vizard,submagic}` (data in
+  `compare/data.ts`: dated prices, review complaints with our verified answers, where they win, sources),
+  `/tools/{youtube-clip-maker,youtube-shorts-maker,podcast-clip-generator}`, FAQ grew to 15 questions (FAQPage JSON-LD),
+  pricing "What every plan promises" + Offer JSON-LD, footer Tools/Compare columns, proxy.ts public routes (robots,
+  sitemap, compare, tools), check.mjs covers them. Verified: next build, check.mjs, Playwright screenshots (user asked for
+  Playwright: `npx -y playwright@1.55.0 screenshot --channel msedge`, no dependency added). Prices NOT changed (user decides).
+- **App round 2 (2026-09-15):** `lib/publish.dart` (ClipEditor incl. hook, ChannelPicker, PublishSheet now/schedule
+  up to 30 days, CalendarPage with post list + unschedule, ScheduleForm days/times/start with preview then schedule,
+  phone zone via flutter_timezone); screens.dart: project calendar + delete actions, clip Edit/Publish (publish only
+  approved + live), score + reason on clips, **fixed "Clip N" numbering (backend idx starts at 1)**, new-project
+  options (clips, shortest/longest, captions switch, validated by `projectSettings`), share-to-app (text/* and video/*
+  intent filters, singleTask; `shares()` in main.dart; iOS share extension not done). Launcher icons generated from
+  the website logo (PIL). Look checked by rendering golden PNGs with real fonts (throwaway test, deleted). 13 tests.
+- **Hook overlay removed + captions switch (user, 2026-09-15):** the black-box hook at the top of each clip is gone
+  (ASS Hook style/event removed); hooks stay as editable copy (ClipEdit.hook, website + app editors). `NewProject.captions`
+  (default true, stored in options; older projects default on) → `clipper.run(captions=)` → `render(burn=)`: the .ass
+  file is always written, burned in only when on. test_clipper renders a real clip both ways and compares frames.
+  Website: "Add captions" checkbox in Options, hook banner removed from sample ClipFrames/CSS, FAQ answer for videos
+  that already have subtitles. Auto-detecting burned-in subtitles NOT built (would need OpenCV text detection on
+  sampled frames; asked the user). Backend deployed with `railway up`.
+- **Buffer per-user (open question 2026-09-15):** Buffer docs say OAuth 2.0 + PKCE clients can be registered in Settings → API;
+  third-party 2026 articles say third-party OAuth isn't enabled for new developers. User to check their Buffer settings.
 
 ## Left
 
@@ -369,11 +456,13 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
       28,800 audio-s/day shared across all customers).
 
 ### Product direction (decided 2026-09-14, narrowed 2026-09-15, beyond masterprompt.md)
-- **Only two ways to use the product: website and MCP**, on one account/subscription/usage balance. The user scrapped
-  the planned Telegram bot and the command-line tool on 2026-09-15 (don't build other channels). The REST API is the
-  website's backend, not a channel.
-- **Payments happen only on the website** (subscriptions). MCP uses the product; it never takes payment.
-- MCP location: `apps/mcp` if it needs its own deployable, else inside the backend (default). Decide in Phase 8.
+- **Only two ways to use the product: the website and a Flutter mobile app** (`apps/mobile`, iOS + Android), on one
+  account/subscription/usage balance. The user scrapped the Telegram bot and the command-line tool (2026-09-15) and
+  then the **MCP server** (2026-09-15, replaced by the mobile app; the user deleted `apps/mcp` and created
+  `apps/mobile`). Don't build other channels. The REST API serves both clients; it is not a channel.
+- **Payments happen only on the website** (subscriptions). The app never takes payment (store rules); it shows plan
+  and usage.
+- **Backend hosting: Railway** (API + worker services, Railway Postgres; media on R2).
 - Limits/subscription checks enforced once in backend services so every channel gets identical rules.
 
 ### Phase 5 — Next.js website (`apps/website`)
@@ -423,14 +512,21 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
 - [ ] Maybe: one calendar across all projects (today it's per project; busy times are already checked across projects),
       per-slot channel choice (spec example shows different networks per day), "Unschedule all".
 
-### Phase 8 — MCP (next; default: mounted inside the FastAPI backend)
-- [ ] Official `mcp` Python SDK, Streamable HTTP at `/mcp`, **authenticated with Clerk OAuth** (Claude/ChatGPT sign in
-      with their ClipperAi account; verify with `authenticate_request(accepts_token=["oauth_token"])`, owner from the
-      token; protected-resource metadata pointing at Clerk; check Clerk dynamic client registration for MCP clients).
-      High-level tools calling the existing owner-scoped services with the same limits as the website: repurpose_video
-      → `jobs.create_project` (link; uploads need a signed upload link), get_project_status / list_projects → `jobs`,
-      generate_content_package → package link (the ZIP streams through the API today), create_content_calendar →
-      `publishing.plan`, schedule_content → `publishing.schedule`.
+### Phase 8 — Mobile app, Flutter (next; `apps/mobile`)
+- [ ] Decisions to settle at the start: Clerk sign-in in Flutter (Clerk's Flutter SDK maturity, or a fallback),
+      state management/HTTP packages (smallest set; each gets a `DECISIONS.md` row), app id/name, iOS build route
+      (this PC is Windows: Android first, iOS needs a Mac or a cloud build).
+- [ ] App as a thin client of the REST API over HTTPS with `Authorization: Bearer <Clerk session token>`; backend
+      checks: `authorized_parties` for app tokens; nothing else should need backend changes for the first version.
+- [ ] Screens: sign in/up; new project (paste link, share-to-app link, pick video from gallery → `POST /api/uploads` +
+      signed PUT with progress); projects list (poll while running); project review (play clip, approve/reject, edit,
+      copy post per platform, save to gallery, share); publish now/schedule + calendar list; plan + usage (read-only,
+      "manage your plan on the website").
+- [ ] Look follows `DESIGN.md` (ground #f4f6fa, accent #2355f5, Geist, pill buttons, 16/24 px cards).
+- [ ] Runnable checks: Flutter widget/unit tests for API calls and screens (fake API), plus a run on an Android
+      emulator against `dev.py --fake-buffer` (emulator reaches the PC's localhost at 10.0.2.2).
+- [ ] Later: push notifications (project done, post failed), background uploads, offline saved clips.
+- [ ] Real phone testing needs the backend on Railway (public HTTPS), so parts of Phase 10 may come first.
 
 ### Phase 9 — Billing & usage
 - [x] Plans + monthly limits, enforced in backend services (2026-09-14); per owner since Clerk (2026-09-15).
@@ -438,7 +534,7 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
       overage. Decide the new price list with the user (pricing report proposal: $12/6 h, $24/20 h, $59/60 h, free 60 min).
 - [ ] When payments go live: subscription state from the provider's webhooks (see Phase 5 "Real payments").
 
-### Phase 10 — Hardening + deploy
+### Phase 10 — Hardening + deploy (Railway, confirmed by the user 2026-09-15)
 - [ ] Railway deploy: Dockerfile/image with ffmpeg + Node/Deno + fonts; Railway Postgres `DATABASE_URL`; separate
       API and worker services.
 - [ ] Tests from masterprompt §46 still missing: long videos, multilingual, no speech, 4:3 / 9:16 sources, multiple
@@ -466,6 +562,12 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
 - STT fallback when needed: onnx-asr + Parakeet v3 on CPU (~$0.01/audio-hr, European languages only).
 
 ## Lessons learned / gotchas
+- **Clerk native tokens have no `azp`**: `clerk-backend-api`'s `authorized_parties` rejects them; check `azp` only when
+  present (`api.signed_in`).
+- **Gradle behind Avast**: the wrapper download fails with PKIX errors; Java must use the Windows trust store
+  (`JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=Windows-ROOT`). Flutter can't load woff2 fonts (convert to TTF).
+- **Vercel CLI** needs `NODE_EXTRA_CA_CERTS` on this PC (else "fetch failed"). Git Bash rewrites `/path` args to
+  `C:/Program Files/Git/path`: probe URLs with node or PowerShell.
 - **ffmpeg segment muxer + FLAC**: pieces keep global frame numbering; the last piece's header claimed the full stream
   length → Groq 500 every time. Encode each chunk separately (`-ss/-t`). Also force `-sample_fmt s16` (float
   sources become 24-bit FLAC, ~23 MB per 10 min, near Groq's 25 MB cap).

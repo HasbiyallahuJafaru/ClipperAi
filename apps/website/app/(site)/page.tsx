@@ -1,10 +1,22 @@
 import { NewProject } from "../new-project";
+import { PLANS } from "../plans";
+import { DESCRIPTION, JsonLd, NAME, SITE } from "../site";
 import { Preview } from "./preview";
 import { Sky } from "./sections";
 
 export default function Home() {
   return (
     <section className="relative isolate -mt-[4.25rem] overflow-hidden px-4 pt-[4.25rem] pb-24 sm:px-6 sm:pb-32">
+      <JsonLd data={[
+        { "@context": "https://schema.org", "@type": "Organization", name: NAME, url: SITE, logo: `${SITE}/icon.svg` },
+        { "@context": "https://schema.org", "@type": "WebSite", name: NAME, url: SITE },
+        {
+          "@context": "https://schema.org", "@type": "SoftwareApplication", name: NAME, url: SITE, description: DESCRIPTION,
+          applicationCategory: "MultimediaApplication", operatingSystem: "Web",
+          offers: { "@type": "AggregateOffer", lowPrice: (Math.min(...PLANS.map((p) => p.price_cents)) / 100).toFixed(2),
+            highPrice: (Math.max(...PLANS.map((p) => p.price_cents)) / 100).toFixed(2), priceCurrency: "USD" },
+        },
+      ]} />
       <Sky />
       <div className="mx-auto max-w-6xl pt-14 text-center sm:pt-20">
         <h1 className="mx-auto max-w-4xl text-[2.75rem] leading-[1.02] font-medium tracking-[-0.04em] sm:text-6xl lg:text-7xl">

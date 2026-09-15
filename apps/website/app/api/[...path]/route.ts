@@ -26,7 +26,7 @@ async function forward(request: Request, { params }: RouteContext<"/api/[...path
     if (disposition) headers.set("Content-Disposition", disposition);
     return new Response(response.body, { status: response.status, headers });
   } catch {
-    return Response.json({ detail: "Can't reach the ClipperAi backend. Is it running?" }, { status: 502 });
+    return Response.json({ detail: "Can't reach YT-Clipper right now. Try again in a minute." }, { status: 502 });
   }
 }
 

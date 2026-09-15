@@ -9,7 +9,7 @@ export function Logo({ className = "" }: { className?: string }) {
         <rect x="10.4" y="6" width="11.2" height="20" rx="2.5" fill="#fff" />
         <rect x="13" y="19.5" width="6" height="2.6" rx="1.3" fill="#2355f5" />
       </svg>
-      ClipperAi
+      YT-Clipper
     </Link>
   );
 }
@@ -42,15 +42,13 @@ const TONES = [
 ];
 
 /** A sample clip frame with the engine's caption style. `words`: one caption group; the spoken word moves along. */
-export function ClipFrame({ tone = 0, hook, words, className = "" }: {
+export function ClipFrame({ tone = 0, words, className = "" }: {
   tone?: number;
-  hook?: string;
   words: string[];
   className?: string;
 }) {
   return (
     <div className={`clip-frame ${className}`} style={{ background: TONES[tone % TONES.length] }}>
-      {hook && <p className="clip-hook">{hook}</p>}
       <p className="clip-caption">
         {words.map((word, i) => (
           <span key={i} className={`word ${i === 1 ? "word-on" : ""}`} style={{ "--i": i } as React.CSSProperties}>
@@ -58,6 +56,30 @@ export function ClipFrame({ tone = 0, hook, words, className = "" }: {
           </span>
         ))}
       </p>
+    </div>
+  );
+}
+
+/** A thin accent bar, 0-100. */
+export function ProgressBar({ value, className = "" }: { value: number; className?: string }) {
+  return (
+    <div role="progressbar" aria-valuenow={value} aria-valuemin={0} aria-valuemax={100} aria-label="Progress"
+         className={`h-1.5 overflow-hidden rounded-full bg-accent-soft ${className}`}>
+      <div className="h-full rounded-full bg-accent transition-[width] duration-700 ease-out" style={{ width: `${value}%` }} />
+    </div>
+  );
+}
+
+/** The source video's picture in a 9:16 clip frame that fills in from the bottom as the clips are made. */
+export function ClipLoading({ src, progress, className = "w-36 sm:w-40" }: { src: string; progress: number; className?: string }) {
+  return (
+    <div className={`clip-frame shrink-0 rounded-2xl bg-ink shadow-card ${className}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- remote thumbnail, any host */}
+      <img src={src} alt="" className="absolute inset-0 size-full object-cover opacity-45 grayscale" />
+      {/* eslint-disable-next-line @next/next/no-img-element -- same picture, full colour up to the progress */}
+      <img src={src} alt="" className="absolute inset-0 size-full object-cover transition-[clip-path] duration-700 ease-out"
+           style={{ clipPath: `inset(${100 - progress}% 0 0 0)` }} />
+      <span className="absolute inset-x-0 bottom-3 text-center text-sm font-semibold text-white tabular-nums drop-shadow">{progress}%</span>
     </div>
   );
 }

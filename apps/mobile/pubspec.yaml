@@ -1,0 +1,40 @@
+name: app
+description: "YT Clipper: turn one long video into a month of clips."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.1
+
+dependencies:
+  clerk_flutter: 0.0.18-beta
+  flutter:
+    sdk: flutter
+  flutter_timezone: ^5.1.0
+  http: ^1.6.0
+  image_picker: ^1.2.3
+  receive_sharing_intent: ^1.9.0
+  share_plus: ^13.3.0
+  video_player: ^2.14.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: Geist  # static cuts of the website's Geist variable font (OFL, fonts/Geist-OFL.txt)
+      fonts:
+        - asset: fonts/Geist-Regular.ttf
+        - asset: fonts/Geist-Medium.ttf
+          weight: 500
+        - asset: fonts/Geist-SemiBold.ttf
+          weight: 600
+    - family: InstrumentSerif  # heading accents, like the website (OFL, fonts/InstrumentSerif-OFL.txt)
+      fonts:
+        - asset: fonts/InstrumentSerif-Italic.ttf
+          style: italic
+  assets:
+    - assets/sky.jpg  # the website's hero photo (Unsplash licence, DECISIONS.md)

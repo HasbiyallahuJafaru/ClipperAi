@@ -3,7 +3,7 @@
 import { CaretRight, FilmSlate, Link as LinkIcon, UploadSimple, WarningCircle } from "@phosphor-icons/react";
 import Link from "next/link";
 import { isFinal, plural, sourceLabel, usePoll, when, type Project } from "@/app/lib";
-import { PageHeader } from "@/app/ui";
+import { PageHeader, ProgressBar } from "@/app/ui";
 
 function State({ project }: { project: Project }) {
   if (project.status === "completed") return <span className="chip chip-accent">{plural(project.clip_count ?? 0, "clip")} ready</span>;
@@ -45,15 +45,23 @@ export default function Dashboard() {
             return (
               <li key={p.id}>
                 <Link href={`/projects/${p.id}`} className="group flex items-center gap-4 px-4 py-4 transition-colors hover:bg-ground/70 sm:px-5">
-                  <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-ground text-muted group-hover:bg-surface">
-                    <Icon weight="bold" className="size-5" />
-                  </span>
+                  {p.thumbnail ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- remote thumbnail
+                    <img src={p.thumbnail} alt="" className="h-11 w-[4.9rem] shrink-0 rounded-xl bg-ground object-cover" />
+                  ) : (
+                    <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-ground text-muted group-hover:bg-surface">
+                      <Icon weight="bold" className="size-5" />
+                    </span>
+                  )}
                   <span className="grid min-w-0 flex-1 gap-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6">
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{sourceLabel(p.source)}</span>
                       <span className="text-sm text-muted">{when(p.created_at)}</span>
                     </span>
-                    <span><State project={p} /></span>
+                    <span className="grid gap-2 sm:justify-items-end">
+                      <State project={p} />
+                      {!isFinal(p.status) && <ProgressBar value={p.progress ?? 0} className="w-full sm:w-40" />}
+                    </span>
                   </span>
                   <CaretRight weight="bold" className="size-4 shrink-0 text-muted transition-transform group-hover:translate-x-0.5" />
                 </Link>

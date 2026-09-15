@@ -2,6 +2,7 @@ import { ClerkProvider } from "@clerk/nextjs";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
+import { DESCRIPTION, NAME, SITE } from "./site";
 
 const geist = localFont({ src: "./fonts/Geist-Variable.woff2", weight: "100 900", variable: "--font-geist" });
 // the italic accent inside headings (`<em>`), chosen by the user for a more stylish hero
@@ -10,8 +11,13 @@ const serif = localFont({ src: "./fonts/InstrumentSerif-Italic.woff2", weight: "
 const montserrat = localFont({ src: "./fonts/Montserrat-ExtraBold.ttf", weight: "800", variable: "--font-montserrat" });
 
 export const metadata: Metadata = {
-  title: "ClipperAi",
-  description: "Turn one video into a month of content: captioned vertical clips, posts for every platform, a calendar.",
+  metadataBase: new URL(SITE),
+  title: { default: `${NAME}: AI Clip Maker for YouTube Shorts, TikTok & Reels`, template: `%s | ${NAME}` },
+  description: DESCRIPTION,
+  applicationName: NAME,
+  alternates: { canonical: "/" },
+  openGraph: { type: "website", siteName: NAME, url: "/", locale: "en_US" },
+  twitter: { card: "summary_large_image" },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

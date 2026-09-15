@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { api, day, isFinal, plural, sourceLabel, STEPS, usePoll, when, type Clip, type Project, type Publications } from "@/app/lib";
-import { PageHeader } from "@/app/ui";
+import { ClipLoading, PageHeader, ProgressBar } from "@/app/ui";
 import { ClipReview } from "./clip";
 import { useChannels, waiting } from "./publish";
 
@@ -82,16 +82,20 @@ function Progress({ project }: { project: Project }) {
   const current = STEPS.findIndex(([status]) => status === project.status); // -1 while waiting in the queue
   return (
     <section className="card mt-8 grid gap-10 rounded-3xl p-6 sm:p-10 md:grid-cols-[1.2fr_1fr]" aria-live="polite">
-      <div>
-        <span className="relative flex size-3">
-          <span className="absolute inset-0 rounded-full bg-accent/40 motion-safe:animate-ping" />
-          <span className="relative size-3 rounded-full bg-accent" />
-        </span>
-        <p className="mt-6 text-3xl leading-tight font-semibold tracking-[-0.03em] text-balance sm:text-4xl">
-          {project.cancel_requested ? "Cancelling..." : project.message}
-        </p>
-        {project.detail && <p className="mt-3 text-muted">{project.detail[0].toUpperCase() + project.detail.slice(1)}</p>}
-        <p className="mt-8 text-sm text-muted">You can close this page. Your clips keep processing.</p>
+      <div className="flex flex-col gap-6 sm:flex-row sm:items-start">
+        {project.thumbnail && <ClipLoading src={project.thumbnail} progress={project.progress ?? 0} />}
+        <div className="min-w-0 flex-1">
+          <span className="relative flex size-3">
+            <span className="absolute inset-0 rounded-full bg-accent/40 motion-safe:animate-ping" />
+            <span className="relative size-3 rounded-full bg-accent" />
+          </span>
+          <p className="mt-6 text-3xl leading-tight font-semibold tracking-[-0.03em] text-balance sm:text-4xl">
+            {project.cancel_requested ? "Cancelling..." : project.message}
+          </p>
+          <ProgressBar value={project.progress ?? 0} className="mt-6" />
+          {project.detail && <p className="mt-3 text-muted">{project.detail[0].toUpperCase() + project.detail.slice(1)}</p>}
+          <p className="mt-8 text-sm text-muted">You can close this page. Your clips keep processing.</p>
+        </div>
       </div>
       <ol className="grid content-start">
         {STEPS.map(([status, label], i) => (

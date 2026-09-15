@@ -1,7 +1,9 @@
 import { Show, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { Logo, PAGES } from "../ui";
+import { COMPETITORS } from "./compare/data";
 import { SiteNav } from "./nav";
+import { TOOLS } from "./tools/data";
 
 export default function SiteLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -26,7 +28,7 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
       <main>{children}</main>
 
       <footer className="border-t border-line bg-surface">
-        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:grid-cols-2 sm:px-6 md:grid-cols-[1.6fr_1fr_1fr]">
+        <div className="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:grid-cols-2 sm:px-6 md:grid-cols-[1.6fr_1fr_1fr_1fr_1fr]">
           <div>
             <Logo />
             <p className="mt-3 max-w-xs text-sm text-muted">Turn one video into a month of content.</p>
@@ -35,6 +37,18 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
             <h2 className="font-medium tracking-normal">Product</h2>
             <ul className="mt-3 grid gap-2.5 text-muted">
               {PAGES.map(([label, href]) => <li key={href}><Link href={href} className="hover:text-ink">{label}</Link></li>)}
+            </ul>
+          </nav>
+          <nav aria-label="Tools" className="text-sm">
+            <h2 className="font-medium tracking-normal">Tools</h2>
+            <ul className="mt-3 grid gap-2.5 text-muted">
+              {TOOLS.map(({ slug, keyword }) => <li key={slug}><Link href={`/tools/${slug}`} className="hover:text-ink">{keyword[0].toUpperCase() + keyword.slice(1)}</Link></li>)}
+            </ul>
+          </nav>
+          <nav aria-label="Compare" className="text-sm">
+            <h2 className="font-medium tracking-normal">Compare</h2>
+            <ul className="mt-3 grid gap-2.5 text-muted">
+              {COMPETITORS.map(({ slug, name }) => <li key={slug}><Link href={`/compare/${slug}`} className="hover:text-ink">{name} alternative</Link></li>)}
             </ul>
           </nav>
           <nav aria-label="Account" className="text-sm">
@@ -52,7 +66,7 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
             </ul>
           </nav>
         </div>
-        <p className="mx-auto max-w-6xl border-t border-line px-4 py-6 text-sm text-muted sm:px-6">© 2026 ClipperAi</p>
+        <p className="mx-auto max-w-6xl border-t border-line px-4 py-6 text-sm text-muted sm:px-6">© 2026 YT-Clipper</p>
       </footer>
     </>
   );

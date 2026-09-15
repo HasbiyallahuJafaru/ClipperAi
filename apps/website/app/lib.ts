@@ -41,6 +41,8 @@ export type Project = {
   files_expire_at?: string;
   clips?: Clip[]; // single project only
   clip_count?: number; // project list only
+  progress: number | null; // 0-100 while processing and when done; null once failed or cancelled
+  thumbnail: string | null; // the source video's picture when the backend can see it (YouTube links)
 };
 
 export type { Plan };

@@ -12,7 +12,7 @@ export default function IntegrationsPage() {
   return (
     <section>
       <PageHeader title="Publishing">
-        Approved clips go out through Buffer. Your social accounts are connected in Buffer, so ClipperAi never sees
+        Approved clips go out through Buffer. Your social accounts are connected in Buffer, so YT-Clipper never sees
         their passwords.
       </PageHeader>
 

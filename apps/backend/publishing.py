@@ -2,7 +2,7 @@
 the MCP server.
 
 The workspace's Buffer account is BUFFER_API_KEY in .env. Social accounts are connected inside Buffer, never here, so
-ClipperAi never sees a social password.
+YT-Clipper never sees a social password.
 
 Buffer reads the video from a link when the post is created and again when it goes out, and it can't read signed
 links. So each post gets its own copy of the clip in the public bucket (storage.public_copy, named after the
@@ -110,7 +110,7 @@ def allowed(owner: str):
 
 
 def channels(owner: str) -> list[dict]:
-    """The social accounts connected in Buffer. `usable`: ClipperAi can post clips there (a network we write copy
+    """The social accounts connected in Buffer. `usable`: YT-Clipper can post clips there (a network we write copy
     for, connected, not locked by Buffer's plan, and not a personal Instagram profile: Buffer only sends those a
     reminder to post by hand)."""
     allowed(owner)

@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import { CtaBand, PageHero, Steps } from "../sections";
 
-export const metadata: Metadata = { title: "How it works | ClipperAi" };
+export const metadata: Metadata = {
+  title: "How It Works: Turn a YouTube Video Into Shorts, TikToks and Reels",
+  description: "Paste a link or upload a video, review the clips YT-Clipper finds, approve them and schedule a month of posts.",
+  alternates: { canonical: "/how-it-works" },
+};
 
 export default function HowItWorks() {
   return (

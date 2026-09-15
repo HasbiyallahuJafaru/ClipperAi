@@ -6,3 +6,4 @@ out/
 tmp/
 pgdata/
 .claude/settings.local.json
+graphify-out/

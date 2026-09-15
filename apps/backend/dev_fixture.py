@@ -47,7 +47,7 @@ for i, color in ((1, "0x1d4ed8"), (2, "0x15803d")):  # ~25 KB each: small enough
                     "32k", str(video)], check=True)
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "1", "-i", str(video), "-frames:v", "1",
                     str(media / f"clip{i:02}.jpg")], check=True)
-    (media / f"clip{i:02}.ass").write_text(clipper.captions([], 0, 4, clips[i - 1]["hook"]), encoding="utf-8")
+    (media / f"clip{i:02}.ass").write_text(clipper.captions([], 0, 4), encoding="utf-8")
 
 with db.connect() as c:
     c.execute("delete from subscriptions where owner = %s", (user.id,))  # the walkthrough starts without a plan

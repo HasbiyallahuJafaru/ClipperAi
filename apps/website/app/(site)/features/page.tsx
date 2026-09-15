@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import { CtaBand, FeatureGrid, PageHero, PublishingMap } from "../sections";
 
-export const metadata: Metadata = { title: "Features | ClipperAi" };
+export const metadata: Metadata = {
+  title: "Features: AI Clips, Captions, Hooks, Posts and a Content Calendar",
+  description: "Face-tracked 9:16 clips, word-by-word captions, hooks, titles, posts for six platforms, a content calendar and publishing through Buffer.",
+  alternates: { canonical: "/features" },
+};
 
 export default function Features() {
   return (

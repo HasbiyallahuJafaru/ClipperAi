@@ -81,6 +81,7 @@ class NewProject(BaseModel):
     clips: int | None = Field(None, ge=1, le=30, description="Clips to make; default ~1 per 6 minutes of video")
     min_seconds: float = Field(30, ge=5, le=180)
     max_seconds: float = Field(60, ge=5, le=180)
+    captions: bool = Field(True, description="Burn captions into the clips; turn off for videos that already have them")
 
     @model_validator(mode="after")
     def check(self):
@@ -98,9 +99,10 @@ class NewProject(BaseModel):
 
 
 class ClipEdit(BaseModel):
-    """Review a clip. Omitted (or null) fields stay as they are. The hook is burned into the video, so it isn't here."""
+    """Review a clip. Omitted (or null) fields stay as they are."""
     review: Literal["pending", "approved", "rejected"] | None = None
     title: str | None = Field(None, min_length=1, max_length=300)
+    hook: str | None = Field(None, max_length=300)
     description: str | None = Field(None, max_length=5000)
     hashtags: list[str] | None = Field(None, max_length=30)
     posts: clipper.Posts | None = None
@@ -110,10 +112,38 @@ class Cancelled(Exception):
     pass
 
 
+# share of the progress bar each stage spans, in %: rendering is the long part
+STAGES = {"queued": (0, 3), "downloading": (3, 25), "transcribing": (25, 45), "analyzing": (45, 60),
+          "rendering": (60, 95), "packaging": (95, 99), "completed": (100, 100)}
+YOUTUBE_ID = re.compile(r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/)|youtu\.be/)([\w-]{11})")
+
+
+def percent(status: str, detail: str) -> int | None:
+    """How far a project is, 0-100, from its stage and the stage's detail ("37%" while downloading, "clip 3 of 8")."""
+    if status not in STAGES:
+        return None  # failed or cancelled: no bar
+    low, high = STAGES[status]
+    if match := re.fullmatch(r"(\d+)%", detail):
+        share = int(match[1]) / 100
+    elif match := re.fullmatch(r"clip (\d+) of (\d+)", detail):
+        share = (int(match[1]) - 1) / int(match[2])
+    else:
+        share = 0
+    return round(low + (high - low) * share)
+
+
+def thumbnail(source: str) -> str | None:
+    """The video's own picture, for links we can see it for without downloading (YouTube's public thumbnails)."""
+    return f"https://i.ytimg.com/vi/{match[1]}/hqdefault.jpg" if (match := YOUTUBE_ID.search(source)) else None
+
+
 def present(project: dict, clips: list[dict] | None = None) -> dict:
-    """API shape: adds a human message and, for finished projects, signed file links until the files expire."""
+    """API shape: adds a human message, progress (0-100), the source's thumbnail and, for finished projects, signed
+    file links until the files expire."""
     retrying = project["status"] == "queued" and project["error"]  # a failed attempt waiting for its backoff
-    project = project | {"message": MESSAGES["retrying" if retrying else project["status"]]}
+    project = project | {"message": MESSAGES["retrying" if retrying else project["status"]],
+                         "progress": percent(project["status"], project["detail"] or ""),
+                         "thumbnail": thumbnail(project["source"])}
     if project["status"] == "completed":
         project["files_expire_at"] = project["finished_at"] + timedelta(days=storage.CLIP_DAYS)
     if clips is not None:
@@ -143,7 +173,8 @@ def discard_upload(source: str):
 def create_project(owner: str, request: NewProject) -> dict:
     """Queues a project. Raises billing.LimitError if the plan doesn't allow another one this month."""
     billing.check_new_project(owner)
-    options = {"n": request.clips, "min_len": request.min_seconds, "max_len": request.max_seconds}
+    options = {"n": request.clips, "min_len": request.min_seconds, "max_len": request.max_seconds,
+               "captions": request.captions}
     with db.connect() as c:
         return present(c.execute("insert into projects (owner, source, options) values (%s, %s, %s) returning *",
                                  (owner, request.source, Jsonb(options))).fetchone())
@@ -195,11 +226,11 @@ def update_clip(owner: str, project_id: UUID, idx: int, edit: ClipEdit) -> dict 
     """Approve/reject a clip and/or replace its copy. Returns the clip row (no file links), None if missing."""
     with db.connect() as c:
         return c.execute("""
-            update clips set review = coalesce(%s, review), title = coalesce(%s, title),
+            update clips set review = coalesce(%s, review), title = coalesce(%s, title), hook = coalesce(%s, hook),
                 description = coalesce(%s, description), hashtags = coalesce(%s, hashtags), posts = coalesce(%s, posts)
             where project_id = %s and idx = %s and project_id in (select id from projects where owner = %s)
             returning *""",
-                         (edit.review, edit.title, edit.description,
+                         (edit.review, edit.title, edit.hook, edit.description,
                           None if edit.hashtags is None else Jsonb(edit.hashtags),
                           None if edit.posts is None else Jsonb(edit.posts.model_dump()), project_id, idx,
                           owner)).fetchone()
@@ -334,7 +365,8 @@ def run_job(project: dict):
         key, out, clips = clipper.run(source, temp / "out", options["n"], options["min_len"], options["max_len"],
                                       progress=progress, load_transcript=load_transcript,
                                       save_transcript=save_transcript, work_root=temp / "work",
-                                      max_seconds=left["seconds"], max_clips=left["clips"])
+                                      max_seconds=left["seconds"], max_clips=left["clips"],
+                                      captions=options.get("captions", True))  # older projects: on
         progress("packaging", f"{len(clips)} clips")
         storage.delete_prefix(f"projects/{pid}/")  # leftovers from an earlier attempt
         for path in sorted(out.iterdir()):

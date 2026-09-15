@@ -58,7 +58,7 @@ export function NewProject() {
     if (!sources.length) return setError({ message: "Paste a link or choose a video." });
 
     setError(undefined);
-    const settings = { clips: Number(form.get("clips")) || null, min_seconds: min, max_seconds: max };
+    const settings = { clips: Number(form.get("clips")) || null, min_seconds: min, max_seconds: max, captions: form.get("captions") === "on" };
     const started: string[] = [];
     try {
       for (const [i, item] of sources.entries()) {
@@ -173,6 +173,13 @@ export function NewProject() {
           <label className="grid content-start gap-2 text-sm font-medium">
             Longest clip, seconds
             <input name="max_seconds" type="number" min={5} max={180} defaultValue={60} required className="input" />
+          </label>
+          <label className="flex items-start gap-3 text-sm font-medium sm:col-span-3">
+            <input name="captions" type="checkbox" defaultChecked className="mt-0.5 size-4 accent-accent" />
+            <span>
+              Add captions
+              <span className="block font-normal text-muted">Turn off for videos that already have subtitles burned in.</span>
+            </span>
           </label>
         </div>
       </div>

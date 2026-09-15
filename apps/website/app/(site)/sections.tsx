@@ -111,9 +111,9 @@ export function FeatureGrid() {
     <div className="grid gap-5 lg:grid-cols-6">
       <article className="relative overflow-hidden rounded-3xl bg-[linear-gradient(180deg,#e6edff,#f4f7ff)] p-7 lg:col-span-3 lg:row-span-2">
         <h2 className="text-xl font-semibold tracking-[-0.02em]">Captions that follow every word</h2>
-        <p className="mt-2 max-w-md text-muted">A few words at a time with the spoken word highlighted, and your hook on screen for the first three seconds.</p>
+        <p className="mt-2 max-w-md text-muted">A few words at a time with the spoken word highlighted. Turn them off for videos that already have their own.</p>
         <div className="mx-auto mt-8 w-[58%] max-w-64 translate-y-10 rounded-[2.2rem] bg-ink p-2 shadow-float sm:w-[46%]" aria-hidden="true">
-          <ClipFrame tone={0} hook="Nobody tells you this" words={["our", "first", "customers"]} className="rounded-[1.7rem]" />
+          <ClipFrame tone={0} words={["our", "first", "customers"]} className="rounded-[1.7rem]" />
         </div>
       </article>
 
@@ -247,7 +247,7 @@ export function CtaBand() {
         </div>
         <div className="relative mx-auto mt-12 h-72 w-56 md:mt-0 md:h-auto md:w-full" aria-hidden="true">
           <div className="absolute top-[12%] left-1/2 w-56 -translate-x-1/2 rotate-[5deg] rounded-[2.4rem] bg-ink p-2 shadow-float md:w-60">
-            <ClipFrame tone={2} hook="Stop sending cold emails" words={["nobody", "reads", "them"]} className="rounded-[1.9rem]" />
+            <ClipFrame tone={2} words={["nobody", "reads", "them"]} className="rounded-[1.9rem]" />
           </div>
         </div>
       </div>
