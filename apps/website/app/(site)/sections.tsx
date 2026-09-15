@@ -37,7 +37,7 @@ export function PageHero({ title, children, extra }: { title: React.ReactNode; c
   );
 }
 
-function SectionHeading({ title, children }: { title: string; children: React.ReactNode }) {
+function SectionHeading({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="mx-auto max-w-2xl text-center">
       <h2 className="text-4xl leading-[1.08] font-medium tracking-[-0.035em] sm:text-5xl">{title}</h2>
@@ -188,7 +188,7 @@ export function FeatureGrid() {
 export function PublishingMap() {
   return (
     <section className="mt-24 sm:mt-32">
-      <SectionHeading title="Post to six platforms from one place">
+      <SectionHeading title={<>Post to six platforms <em>from one place</em></>}>
         Connect your accounts in Buffer, then post a clip now or schedule it up to 30 days ahead.
       </SectionHeading>
       <div className="relative mx-auto mt-12 aspect-[1000/380] max-w-4xl min-w-0" aria-hidden="true">
@@ -240,7 +240,7 @@ export function CtaBand() {
           <div className="absolute inset-0 bg-[linear-gradient(90deg,rgb(255_255_255/.78),rgb(255_255_255/.35)_60%,rgb(255_255_255/.05))]" />
         </div>
         <div className="self-center md:py-20">
-          <h2 className="max-w-md text-4xl leading-[1.06] font-medium tracking-[-0.035em] sm:text-5xl">Your next month of posts is already recorded</h2>
+          <h2 className="max-w-md text-4xl leading-[1.06] font-medium tracking-[-0.035em] sm:text-5xl">Your next month of posts is <em>already recorded</em></h2>
           <p className="mt-4 max-w-sm text-lg text-[#2c3650]">Paste a link and review your first clips today.</p>
           <Show when="signed-out"><Link href="/sign-up" className="btn btn-primary mt-8 h-12 px-6">Sign up</Link></Show>
           <Show when="signed-in"><Link href="/projects/new" className="btn btn-primary mt-8 h-12 px-6">New project</Link></Show>

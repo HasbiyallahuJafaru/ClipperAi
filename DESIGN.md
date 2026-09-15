@@ -19,7 +19,7 @@ one royal blue accent, near-black navy ink. Light only (user decision). No dark 
 | danger / soft | `#c0262d` / `#fdeeee` | errors, failed states |
 | caption | `#ffe600` | spoken word in clip captions only |
 
-Type: Geist variable; headings medium (marketing) or semibold (app), tracking -0.03 to -0.04em. Montserrat ExtraBold
+Type: Geist variable; headings medium (marketing) or semibold (app), tracking -0.03 to -0.04em. Marketing headings put their key words in `<em>`: Instrument Serif Italic, 1.1em, accent blue (user's pick). Montserrat ExtraBold
 only for captions and hooks. Shadows: `shadow-card` (resting), `shadow-float` (hero preview, featured, popovers).
 
 ## Shape

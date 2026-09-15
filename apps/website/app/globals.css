@@ -52,6 +52,18 @@ h1, h2, h3 {
   letter-spacing: -0.03em;
 }
 
+/* Marketing headings: the words in <em> switch to a blue italic serif (user's pick, 2026-09-15). Slightly larger because
+   Instrument Serif's letters run smaller than Geist's; the small bottom padding keeps descenders clear. */
+h1 em, h2 em {
+  font-family: var(--font-serif), Georgia, serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 1.1em;
+  letter-spacing: -0.01em;
+  color: var(--color-accent);
+  padding-inline-end: 0.04em;
+}
+
 [id] { scroll-margin-top: 6rem; }
 
 ::selection {

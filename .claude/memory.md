@@ -8,7 +8,7 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
   publishing through Buffer, content calendar, **Clerk accounts (sign-in/up, protected pages, backend token checks,
   every project/plan/post owned by a Clerk org or user)**. Channels: **website + MCP only**.
 - **Pushed:** everything, incl. Clerk accounts + Next 16.3.5 patch (2026-09-15, commit "Accounts with Clerk...").
-- **Website redesign done, not committed** (2026-09-15, see Done). **Next:** user reviews it, commit when asked. Then Phase 8 MCP server with
+- **Website redesign done and pushed** (bf42176, 2026-09-15, see Done). **Next:** Phase 8 MCP server with
   Clerk OAuth → per-account publishing connection → Phase 9 cost tracking (+ payments when asked) → Phase 10 deploy +
   hardening. Pricing proposal waiting on the user (see Done: pricing report).
 - **Not proven on real services:** a full project end to end on real R2 (Avast blocks it here), Instagram posting,
@@ -312,7 +312,7 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
 - **Not verified:** a real person signing up (email code, Google/Apple) in a normal browser; Clerk Organizations
   switching (owner = org_id path untested with a real org); Clerk components in dark mode (card stays light).
 
-### Website redesign after the "Relink" reference (2026-09-15, not committed)
+### Website redesign after the "Relink" reference (2026-09-15, pushed in bf42176)
 - User answers: sample clips = placeholder gradient frames (no generated people until a video we own); plan prices
   **copied** into `apps/website/app/plans.ts` (no public backend route); **light only**; then mid-build: **each nav link
   its own page** (home = hero + composer + preview only).

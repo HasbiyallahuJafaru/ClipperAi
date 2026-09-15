@@ -8,7 +8,7 @@ export default function Home() {
       <Sky />
       <div className="mx-auto max-w-6xl pt-14 text-center sm:pt-20">
         <h1 className="mx-auto max-w-4xl text-[2.75rem] leading-[1.02] font-medium tracking-[-0.04em] sm:text-6xl lg:text-7xl">
-          Turn one video into a month of content
+          Turn one video into <em>a month of content</em>
         </h1>
         <p className="mx-auto mt-6 max-w-xl text-lg text-[#2c3650] sm:text-xl">
           Paste a link or upload a video. Get captioned vertical clips, posts for every platform and a posting calendar.
