@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { Plan } from "./plans";
 
 // Shapes returned by the backend (apps/backend/jobs.py).
 export type Status =
@@ -42,14 +43,7 @@ export type Project = {
   clip_count?: number; // project list only
 };
 
-export type Plan = {
-  id: string;
-  name: string;
-  price_cents: number;
-  videos: number | null; // null = no cap
-  minutes: number;
-  clips: number;
-};
+export type { Plan };
 
 export type Subscription = {
   id: string;

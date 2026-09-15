@@ -20,7 +20,7 @@ assert.equal(response.status, 403, "other sites must not be able to act through 
 
 // plain requests: with browser headers a Clerk development instance first bounces every page through its handshake
 const page = (path) => call(path);
-for (const path of ["/", "/pricing", "/sign-in", "/sign-up"]) {
+for (const path of ["/", "/how-it-works", "/features", "/pricing", "/faq", "/sign-in", "/sign-up"]) {
   assert.equal((await page(path)).status, 200, path);
 }
 for (const path of ["/dashboard", "/projects/new", `/projects/${missing}`, `/projects/${missing}/calendar`,

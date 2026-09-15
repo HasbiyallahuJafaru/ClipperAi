@@ -64,8 +64,11 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
 - **Publishing through a provider (Buffer)**, users connect their own accounts via OAuth/their key; never ask for
   social passwords. Don't build per-network integrations in the MVP. Single posts are sent in the request; content
   calendar posts are queued (`publications.status = 'queued'`) and handed to Buffer by the worker.
-- **UI (Phase 5)**: Next.js + TypeScript + Tailwind, extremely clean and minimal, no gradients/card clutter/generic
-  AI-SaaS look; human-readable progress messages ("Finding your strongest moments...").
+- **UI (redesigned 2026-09-15 after the user's "Relink" reference)**: Next.js + TypeScript + Tailwind; modern premium
+  SaaS, **light only**: sky photo heroes, white rounded cards on pale grey, one royal blue accent (#2355f5), Geist,
+  pill buttons, Phosphor icons. Yellow only inside clip captions. Each nav link is its own page (user, 2026-09-15), the
+  home page is just the hero. Tokens/components: `app/globals.css`, system notes: `DESIGN.md`. Keep human-readable
+  progress messages ("Finding your strongest moments...") and every text `walkthrough.mjs` clicks.
 
 ## Security rules
 - **The GitHub repo is public** (github.com/HasbiyallahuJafaru/ClipperAi). Never commit `.env`, keys, tokens,

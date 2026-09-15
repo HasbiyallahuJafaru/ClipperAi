@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PLANS } from "./app/plans.ts"; // Node 24 runs TypeScript files with only type annotations
 
 const SITE = "http://localhost:3000"; // next binds localhost: with proxy.ts it forwards requests to localhost internally
 const [PROJECT, MEDIA, TICKET] = process.argv.slice(2);
@@ -96,7 +97,9 @@ try {
   // 0. signed out: the header offers Sign in / Sign up, private pages send you to sign in, the API says so; then sign in
   await go("/");
   await until(`[...document.querySelectorAll("button")].some((b) => b.textContent === "Sign up")`, "Sign up button", 30000);
-  assert.ok(!(await js("document.body.innerText")).includes("Projects"), "app links are hidden when signed out");
+  // the page itself may say "Projects" (the product preview shows the app); the header and footer links must not
+  assert.ok(!(await js(`[...document.querySelectorAll("header, footer")].map((e) => e.innerText).join(" ")`)).includes("Projects"),
+            "app links are hidden when signed out");
   await shot("cdp-signed-out", 1440);
   await send("Page.navigate", { url: SITE + "/dashboard" });
   await until(`location.pathname.startsWith("/sign-in")`, "redirect to sign-in", 30000);
@@ -119,7 +122,8 @@ try {
   assert.equal(await status("POST", `projects/${missing}/calendar/plan`,
     '{"channels": ["a"], "days": [1], "times": ["09:00"], "start": "2026-09-21", "timezone": "Mars/Olympus"}'), 422);
   assert.equal(await status("DELETE", `publications/${missing}`), 404);
-  assert.deepEqual((await api("billing")).plans.map((p) => p.price_cents), [1500, 3900, 9900]);
+  // app/plans.ts is a copy of billing.py's plans so visitors see prices: it must match what the backend enforces
+  assert.deepEqual((await api("billing")).plans, PLANS, "app/plans.ts has drifted from apps/backend/billing.py PLANS");
   ok("signed-in API: 404 for missing project/clip/post, 422 for a local source, unknown plan and time zone");
 
   // 1. no plan yet

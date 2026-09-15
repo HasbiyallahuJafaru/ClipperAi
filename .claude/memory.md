@@ -8,9 +8,7 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
   publishing through Buffer, content calendar, **Clerk accounts (sign-in/up, protected pages, backend token checks,
   every project/plan/post owned by a Clerk org or user)**. Channels: **website + MCP only**.
 - **Pushed:** everything, incl. Clerk accounts + Next 16.3.5 patch (2026-09-15, commit "Accounts with Clerk...").
-- **Next:** the user asked (then interrupted) for a **website redesign after a reference "Relink" SaaS landing page**
-  (modern premium SaaS; impeccable + design-taste-frontend; details in handover.md; not started, image to be re-sent;
-  it replaces the minimal/caption-yellow look and the "no gradients/card clutter" rule). Then Phase 8 MCP server with
+- **Website redesign done, not committed** (2026-09-15, see Done). **Next:** user reviews it, commit when asked. Then Phase 8 MCP server with
   Clerk OAuth → per-account publishing connection → Phase 9 cost tracking (+ payments when asked) → Phase 10 deploy +
   hardening. Pricing proposal waiting on the user (see Done: pricing report).
 - **Not proven on real services:** a full project end to end on real R2 (Avast blocks it here), Instagram posting,
@@ -313,6 +311,29 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
   projects, 2 posts, 2 plans deleted; the 4 old projects have no owner so nobody sees them).
 - **Not verified:** a real person signing up (email code, Google/Apple) in a normal browser; Clerk Organizations
   switching (owner = org_id path untested with a real org); Clerk components in dark mode (card stays light).
+
+### Website redesign after the "Relink" reference (2026-09-15, not committed)
+- User answers: sample clips = placeholder gradient frames (no generated people until a video we own); plan prices
+  **copied** into `apps/website/app/plans.ts` (no public backend route); **light only**; then mid-build: **each nav link
+  its own page** (home = hero + composer + preview only).
+- Look: sky photo (Unsplash xtgONQzGgOE, `app/(site)/sky.jpg`), ground #f4f6fa, accent #2355f5, Geist (vendored woff2),
+  Phosphor icons (new npm dep), pill buttons, 16/24px cards. Details: `DESIGN.md`; deps + licence: `DECISIONS.md`.
+- Structure: route groups `app/(site)` (/, /how-it-works, /features, /pricing, /faq, sign-in/up; public in `proxy.ts`)
+  and `app/(app)` (sidebar shell: dashboard, projects, calendar, settings, checkout). URLs unchanged. Shared: `app/ui.tsx`
+  (Logo, PageHeader, ClipFrame, PAGES), `app/(site)/sections.tsx`. Signed-out visitors can submit the composer: 401 now
+  shows a Sign up link. Old Montserrat headings, yellow accent and the "no gradients" rule are gone.
+- Verified: `next build` ok; `check.mjs` ok (7 public pages); **`walkthrough.mjs` passed end to end** (header/footer-only
+  "Projects" check, new plans drift assertion); screenshots desktop 1440 + phone 390 of every marketing page (2 rounds,
+  fixes: preview phone hid sidebar, Options wrap, empty blue card space, plan price alignment, heading break) and of
+  review/calendar/billing/publishing/checkout/publish form; calendar post-row wrap fixed after the last screenshot
+  (built, not re-screenshotted). impeccable detector: 1 false positive (tab underline). Dev DB: test user data deleted.
+- Gotchas: a server component can't import a constant from a `"use client"` file (becomes a client reference: "PAGES.map
+  is not a function" at prerender); Git Bash rewrites `/pricing` args to Windows paths (use `MSYS_NO_PATHCONV=1`);
+  Node 24 imports `app/plans.ts` directly (prints a harmless module-type warning).
+- Found in the dev DB, left alone: a project + Creator plan owned by `user_3JMPnCcS92s2JtVKOl6xJvWA1SC` (created
+  2026-09-15 11:08 UTC, probably the user signing up).
+- Not done: the skill's separate finish-reviewer/documenter agents and PRODUCT.md (DESIGN.md written by hand; product
+  truth stays in CLAUDE.md/masterprompt.md); real clip frames; checking in a real (non-headless) browser.
 
 ### Repo (2026-09-14)
 - Pushed to https://github.com/HasbiyallahuJafaru/ClipperAi (public, `main`, first commit 402473e) with README,
