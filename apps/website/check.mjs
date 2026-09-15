@@ -42,8 +42,14 @@ assert.equal(response.status, 422, "at least one channel");
 response = await call(`/api/projects/${missing}/clips/1/publish`, { method: "POST", body: '{"channels": ["a"]}' });
 assert.equal(response.status, 404, "a missing clip is refused before Buffer is asked anything");
 
-for (const page of ["/", "/dashboard", "/projects/new", `/projects/${missing}`, "/pricing", "/checkout?plan=pro",
-                    "/settings/billing", "/settings/integrations"]) {
+const calendar = { channels: ["a"], days: [1, 3, 5], times: ["09:00"], start: "2026-09-21", timezone: "Europe/London" };
+response = await call(`/api/projects/${missing}/calendar/plan`, { method: "POST", body: JSON.stringify(calendar) });
+assert.equal(response.status, 404, "a missing project's calendar is refused before Buffer is asked anything");
+response = await call(`/api/projects/${missing}/calendar`, { method: "POST", body: JSON.stringify({ ...calendar, timezone: "Mars/Olympus" }) });
+assert.equal(response.status, 422, "unknown time zones are refused");
+
+for (const page of ["/", "/dashboard", "/projects/new", `/projects/${missing}`, `/projects/${missing}/calendar`, "/pricing",
+                    "/checkout?plan=pro", "/settings/billing", "/settings/integrations"]) {
   assert.equal((await fetch(`${site}${page}`)).status, 200, page);
 }
 console.log("ok");

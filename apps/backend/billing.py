@@ -1,4 +1,4 @@
-"""Plans, the workspace's subscription and monthly usage limits. Every channel (website, MCP, Telegram) goes through
+"""Plans, the workspace's subscription and monthly usage limits. Both channels (website, MCP) go through
 these checks; clients never enforce limits themselves.
 
 Payments are switched off: choosing a plan activates it at once and nothing is charged (`charged_cents` stays 0)."""

@@ -220,7 +220,8 @@ class _Pipe(io.RawIOBase):
 
 def content_package(project_id: UUID) -> Iterator[bytes] | None:
     """A ZIP of every clip that wasn't rejected: videos/, captions/, thumbnails/ and metadata/clips.csv + clips.json
-    with the current (edited) copy, streamed straight from storage. None if there's nothing to package: the project
+    with the current (edited) copy, plus calendar.csv once anything is scheduled or posted, streamed straight from
+    storage. None if there's nothing to package: the project
     is missing, unfinished or expired, or every clip was rejected."""
     # ponytail: the bytes flow through the API server; build the ZIP in the worker and hand out a link if bandwidth
     # or open connections become a problem
@@ -250,6 +251,19 @@ def content_package(project_id: UUID) -> Iterator[bytes] | None:
             package.writestr("metadata/clips.csv", table.getvalue().encode("utf-8-sig"))  # BOM so Excel reads UTF-8
             package.writestr("metadata/clips.json", json.dumps(
                 [{k: clip[k] for k in [*copy, "posts", *facts]} for clip in clips], indent=2, ensure_ascii=False))
+            with db.connect() as c:  # every post of the project, scheduled or not, in time order (UTC)
+                posts = c.execute("""
+                    select coalesce(p.due_at, p.created_at) as due_at, p.clip_idx, c.title,
+                        case p.service when 'twitter' then 'x' else p.service end as network, p.channel_name,
+                        p.status, p.external_link, p.error
+                    from publications p join clips c on c.project_id = p.project_id and c.idx = p.clip_idx
+                    where p.project_id = %s order by 1, p.clip_idx, network""", (project_id,)).fetchall()
+            if posts:
+                table = io.StringIO()
+                writer = csv.DictWriter(table, list(posts[0]))
+                writer.writeheader()
+                writer.writerows(posts)
+                package.writestr("calendar.csv", table.getvalue().encode("utf-8-sig"))
         yield pipe.take()
 
     return stream()
@@ -313,7 +327,8 @@ def run_job(project: dict):
             source = str(temp / "upload")
             storage.get(f"uploads/{upload[1]}", temp / "upload")
         key, out, clips = clipper.run(source, temp / "out", options["n"], options["min_len"], options["max_len"],
-                                      progress, load_transcript, save_transcript, work_root=temp / "work",
+                                      progress=progress, load_transcript=load_transcript,
+                                      save_transcript=save_transcript, work_root=temp / "work",
                                       max_seconds=left["seconds"], max_clips=left["clips"])
         progress("packaging", f"{len(clips)} clips")
         storage.delete_prefix(f"projects/{pid}/")  # leftovers from an earlier attempt
@@ -356,7 +371,18 @@ def run_job(project: dict):
 
 def work(concurrency: int):
     # ponytail: fixed thread count; size it to CPU/RAM (each job runs one ffmpeg) and per-plan limits later
+    import publishing  # here rather than at the top: publishing imports this module
     db.migrate()
+
+    def send_posts():  # the content calendar's queued posts, one at a time (Buffer allows 100 requests per 15 minutes)
+        while True:
+            try:
+                if not publishing.send_queued():
+                    time.sleep(5)
+            except Exception:  # Buffer or storage can't be used right now: the post is back in the queue
+                # ponytail: fixed one-minute wait; use Buffer's Retry-After if limit hits start costing requests
+                traceback.print_exc()
+                time.sleep(60)
 
     def loop():
         while True:
@@ -378,6 +404,7 @@ def work(concurrency: int):
 
     for _ in range(concurrency):
         threading.Thread(target=loop, daemon=True).start()
+    threading.Thread(target=send_posts, daemon=True).start()
     print(f"worker running, {concurrency} job(s) at a time", flush=True)
     while True:
         time.sleep(3600)  # main thread stays interruptible (Ctrl+C); jobs cut off mid-way are requeued by claim()

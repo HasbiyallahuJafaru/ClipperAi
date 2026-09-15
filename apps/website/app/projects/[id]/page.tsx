@@ -138,6 +138,8 @@ function Results({ project, onClip }: { project: Project; onClip: (clip: Clip) =
   // the backend checks with Buffer at most once a minute per post, so polling faster than this gains nothing
   const posts = usePoll<Publications>(`projects/${project.id}/publications`, (d) => d.publications.some(waiting), 20000);
   const channels = useChannels();
+  const onCalendar = new Set(posts.data?.publications.filter((p) => p.status !== "error").map((p) => p.clip_idx));
+  const unscheduled = clips.some((c) => c.review === "approved" && !onCalendar.has(c.idx));
 
   async function approveAll() {
     setBusy(true);
@@ -169,6 +171,11 @@ function Results({ project, onClip }: { project: Project; onClip: (clip: Clip) =
         <div className="flex flex-wrap gap-2">
           {pending.length > 0 && (
             <button className="btn" onClick={approveAll} disabled={busy}>{busy ? "Approving..." : "Approve all"}</button>
+          )}
+          {live && unscheduled ? (
+            <Link className="btn" href={`/projects/${project.id}/calendar`}>Schedule all</Link>
+          ) : !!posts.data?.publications.length && (
+            <Link className="btn" href={`/projects/${project.id}/calendar`}>Calendar</Link>
           )}
           {live && clips.some((c) => c.review !== "rejected") && (
             <a className="btn btn-primary" href={`/api/projects/${project.id}/package`} download>Download all</a>

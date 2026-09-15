@@ -6,16 +6,22 @@ ClipperAi never sees a social password.
 
 Buffer reads the video from a link when the post is created and again when it goes out, and it can't read signed
 links. So each post gets its own copy of the clip in the public bucket (storage.public_copy, named after the
-publication id), deleted once the post has been sent, has failed or is unscheduled."""
+publication id), deleted once the post has been sent, has failed or is unscheduled.
+
+The content calendar (plan, schedule) spreads approved clips over posting days and times. Its posts are queued here
+first and handed to Buffer by the worker (send_queued), so a month of posts never holds up a request."""
 import json
 import os
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from itertools import islice
+from typing import Annotated
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import psycopg
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, field_validator
 
 import db
 import jobs
@@ -26,6 +32,8 @@ API = "https://api.buffer.com"  # test_jobs.py and `dev.py --fake-buffer` point 
 SERVICES = {"tiktok": "tiktok", "instagram": "instagram", "youtube": "youtube", "linkedin": "linkedin",
             "facebook": "facebook", "twitter": "x"}
 AHEAD = timedelta(days=30)  # the public copy must still exist when the post goes out (storage.PUBLIC_DAYS is 45)
+# a calendar post is queued before Buffer sees it: leave time to wait out Buffer's request limit (15 minutes at worst)
+EARLIEST = timedelta(minutes=30)
 CREATE = """mutation($input: CreatePostInput!) { createPost(input: $input) {
     ... on PostActionSuccess { post { id status dueAt sentAt externalLink error { message } } }
     ... on MutationError { message } } }"""
@@ -46,6 +54,23 @@ class PublishError(Exception):
 class Publish(BaseModel):
     channels: list[str] = Field(min_length=1, max_length=20, description="Buffer channel ids, from GET /api/publishing/channels")
     due_at: AwareDatetime | None = Field(None, description="When to post (ISO 8601 with time zone); omit to post now")
+
+
+class Calendar(BaseModel):
+    channels: list[str] = Field(min_length=1, max_length=20, description="Buffer channel ids, from GET /api/publishing/channels")
+    days: list[Annotated[int, Field(ge=1, le=7)]] = Field(min_length=1, max_length=7, description="Posting days, 1 = Monday to 7 = Sunday")
+    times: list[time] = Field(min_length=1, max_length=6, description="Posting times on those days, e.g. 09:00")
+    start: date = Field(description="First day posts can go out")
+    timezone: str = Field(description="Time zone of the days and times, e.g. Europe/London")
+
+    @field_validator("timezone")
+    @classmethod
+    def known(cls, name: str) -> str:
+        try:
+            ZoneInfo(name)
+        except (KeyError, ValueError):  # ZoneInfoNotFoundError is a KeyError; paths and other odd keys are ValueErrors
+            raise ValueError(f"unknown time zone {name!r}") from None
+        return name
 
 
 def call(query: str, **variables) -> dict:
@@ -85,6 +110,18 @@ def channels() -> list[dict]:
                       id=organization["id"])["channels"]
     return [c | {"usable": c["service"] in SERVICES and not c["isDisconnected"] and not c["isLocked"]
                  and not (c["service"] == "instagram" and c["type"] == "profile")} for c in found]
+
+
+def ready(channel_ids: list[str]) -> list[dict]:
+    """The chosen channels, once it's certain publishing is set up and every one of them can take clips."""
+    if not (os.environ.get("S3_PUBLIC_BUCKET") and os.environ.get("S3_PUBLIC_URL")):
+        raise PublishError("Publishing isn't set up yet: Buffer needs a public bucket for videos. Set S3_PUBLIC_BUCKET"
+                           " and S3_PUBLIC_URL in the backend's .env.")
+    by_id = {c["id"]: c for c in channels()}
+    chosen = [by_id.get(i) for i in dict.fromkeys(channel_ids)]
+    if not all(c and c["usable"] for c in chosen):
+        raise PublishError("One of those channels can't be used any more. Reload the page and choose again.", 422)
+    return chosen
 
 
 def schedule_until(project: dict) -> datetime | None:
@@ -144,14 +181,7 @@ def publish(project_id: UUID, idx: int, request: Publish) -> list[dict] | None:
         raise PublishError("That time has already passed. Pick a time in the future.", 422)
     if request.due_at and request.due_at > schedule_until(project):
         raise PublishError(f"Posts can be scheduled up to {AHEAD.days} days ahead. Pick an earlier time.", 422)
-    if not (os.environ.get("S3_PUBLIC_BUCKET") and os.environ.get("S3_PUBLIC_URL")):
-        raise PublishError("Publishing isn't set up yet: Buffer needs a public bucket for videos. Set S3_PUBLIC_BUCKET"
-                           " and S3_PUBLIC_URL in the backend's .env.")
-
-    by_id = {c["id"]: c for c in channels()}
-    chosen = [by_id.get(i) for i in dict.fromkeys(request.channels)]
-    if not all(c and c["usable"] for c in chosen):
-        raise PublishError("One of those channels can't be used any more. Reload the page and choose again.", 422)
+    chosen = ready(request.channels)
     with db.connect() as c:
         taken = [r["channel_name"] for r in c.execute("""
             select channel_name from publications where project_id = %s and clip_idx = %s and channel_id = any(%s)
@@ -178,6 +208,102 @@ def publish(project_id: UUID, idx: int, request: Publish) -> list[dict] | None:
             raise
         published.append(save(row["id"], result["post"]) if "post" in result else save(row["id"], error=result["message"]))
     return published
+
+
+def slots(request: Calendar, earliest: datetime, until: datetime):
+    """The calendar's posting times in order: each chosen time on each chosen weekday from `start`, in the request's
+    time zone (so daylight saving is followed), that falls between `earliest` and `until`."""
+    zone = ZoneInfo(request.timezone)
+    day = max(request.start, earliest.astimezone(zone).date())
+    while datetime.combine(day, time(), zone) <= until:
+        if day.isoweekday() in request.days:
+            for at in sorted(datetime.combine(day, t, zone) for t in set(request.times)):
+                if earliest <= at <= until:
+                    yield at.astimezone(timezone.utc)
+        day += timedelta(days=1)
+
+
+def plan(project_id: UUID, request: Calendar) -> dict | None:
+    """The calendar before anything is sent: approved clips that aren't scheduled or posted yet, in clip order, one per
+    posting time up to 30 days ahead, skipping times the chosen channels already have a post at (from any project).
+    `left`: the clips that didn't fit. None if the project doesn't exist."""
+    project = jobs.get_project(project_id)
+    if project is None:
+        return None
+    until = schedule_until(project)
+    if until is None:
+        raise PublishError("This project's videos have expired, so its clips can't be scheduled.")
+    with db.connect() as c:
+        taken = {r["clip_idx"] for r in c.execute(
+            "select clip_idx from publications where project_id = %s and status <> 'error'", (project_id,))}
+        busy = {r["due_at"] for r in c.execute("""select due_at from publications
+            where channel_id = any(%s) and status <> 'error' and due_at > now()""", (request.channels,))}
+    approved = [clip for clip in project["clips"] if clip["review"] == "approved"]
+    clips = [clip for clip in approved if clip["idx"] not in taken]
+    if not clips:
+        raise PublishError("Every approved clip is already scheduled or posted." if approved
+                           else "Approve the clips you want to schedule first.")
+    free = (at for at in slots(request, datetime.now(timezone.utc) + EARLIEST, until) if at not in busy)
+    due = list(islice(free, len(clips)))
+    if not due:
+        raise PublishError(f"None of those days and times fall within the next {AHEAD.days} days. Pick an earlier"
+                           " start date.", 422)
+    return {"posts": [{"clip_idx": clip["idx"], "title": clip["title"], "due_at": at} for clip, at in zip(clips, due)],
+            "left": [clip["idx"] for clip in clips[len(due):]]}
+
+
+def schedule(project_id: UUID, request: Calendar) -> list[dict] | None:
+    """Puts the plan on the calendar: one queued post per clip and channel, which the worker hands to Buffer within
+    moments (send_queued). Returns the queued posts; None if the project doesn't exist."""
+    planned = plan(project_id, request)
+    if planned is None:
+        return None
+    chosen = ready(request.channels)
+    queued = []
+    with db.connect() as c, c.transaction():
+        for post in planned["posts"]:
+            for channel in chosen:  # the same calendar sent twice at once queues each post only once
+                queued += c.execute("""
+                    insert into publications (project_id, clip_idx, channel_id, service, channel_name, due_at, status)
+                    values (%s, %s, %s, %s, %s, %s, 'queued')
+                    on conflict (project_id, clip_idx, channel_id) where status <> 'error' do nothing returning *""",
+                                    (project_id, post["clip_idx"], channel["id"], channel["service"],
+                                     channel["displayName"] or channel["name"], post["due_at"])).fetchall()
+    return queued
+
+
+def send_queued() -> bool:
+    """The worker's half of the calendar: hands the queued post that's due first to Buffer. False if none is waiting.
+    Raises when Buffer or storage can't be used right now (request limit, key, outage); the post goes back in the
+    queue and the caller should wait before trying again."""
+    with db.connect() as c:
+        row = c.execute("""update publications set status = 'sending', checked_at = now()
+                           where id = (select id from publications where status = 'queued' order by due_at
+                                       for update skip locked limit 1)
+                           returning *""").fetchone()
+    if row is None:
+        return False
+    if row["due_at"] < datetime.now(timezone.utc) + timedelta(minutes=1):
+        save(row["id"], error="This post couldn't be handed to Buffer before its time. Schedule it again.")
+        return True
+    # ponytail: sent even if the clip was un-approved after scheduling; check clip["review"] here if that happens
+    clip = next(c for c in jobs.get_project(row["project_id"])["clips"] if c["idx"] == row["clip_idx"])
+    try:
+        video_url = storage.public_copy(f"projects/{row['project_id']}/clip{row['clip_idx']:02}.mp4",
+                                        video_name(row["id"]))
+        result = call(CREATE, input=post_input(clip, {"id": row["channel_id"], "service": row["service"]}, video_url,
+                                               row["due_at"]))["createPost"]
+    except Exception as e:
+        if isinstance(e, PublishError) and isinstance(e.__cause__, TimeoutError):
+            # Buffer received the post but never answered, so it may exist: sending it again could post it twice
+            save(row["id"], error="Buffer didn't answer in time, so this post may not be scheduled. Check Buffer"
+                                  " before scheduling it again.")
+            return True
+        with db.connect() as c:
+            c.execute("update publications set status = 'queued' where id = %s", (row["id"],))
+        raise
+    save(row["id"], result["post"]) if "post" in result else save(row["id"], error=result["message"])
+    return True
 
 
 def publications(project_id: UUID) -> dict | None:
@@ -214,6 +340,12 @@ def remove(publication_id: UUID) -> dict | None:
         row = c.execute("select * from publications where id = %s", (publication_id,)).fetchone()
     if row is None:
         return None
+    if row["status"] == "queued":  # not in Buffer yet, unless the worker takes it this very moment
+        with db.connect() as c:
+            if c.execute("delete from publications where id = %s and status = 'queued'", (publication_id,)).rowcount:
+                storage.delete_public(video_name(publication_id))  # left by an attempt that was put back in the queue
+                return row
+        raise PublishError("This post is being handed to Buffer right now. Try again in a moment.")
     if row["buffer_post_id"] and row["status"] in ("sending", "sent"):
         raise PublishError("This post has already gone out. Delete it on the network itself.")
     if row["buffer_post_id"] and row["status"] != "error":

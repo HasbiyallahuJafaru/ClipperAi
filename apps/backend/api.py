@@ -4,6 +4,8 @@ Every route needs `Authorization: Bearer <API_KEY>` (API_KEY in .env). Processin
 Upload flow: POST /api/uploads -> PUT the file to upload_url -> POST /api/projects {"source": "upload:<id>"}.
 Files are served as signed storage links on each clip (video_url, captions_url, thumbnail_url).
 Publishing: GET /api/publishing/channels -> POST .../clips/{idx}/publish {"channels": [...], "due_at": optional}.
+Calendar: POST /api/projects/{id}/calendar/plan (preview) -> POST /api/projects/{id}/calendar (queues the posts; the
+worker hands them to Buffer) -> GET .../publications for their status.
 Plan limits answer 402 and publishing problems 409/422/502, with a message people can read."""
 import os
 import secrets
@@ -121,6 +123,16 @@ def publish_clip(project_id: UUID, idx: int, request: publishing.Publish):
     if (published := publishing.publish(project_id, idx, request)) is None:
         raise HTTPException(404, "clip not found")
     return published
+
+
+@app.post("/api/projects/{project_id}/calendar/plan")
+def plan_calendar(project_id: UUID, request: publishing.Calendar):
+    return found(publishing.plan(project_id, request))
+
+
+@app.post("/api/projects/{project_id}/calendar", status_code=201)
+def schedule_calendar(project_id: UUID, request: publishing.Calendar):
+    return found(publishing.schedule(project_id, request))
 
 
 @app.get("/api/projects/{project_id}/publications")

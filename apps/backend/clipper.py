@@ -1,10 +1,8 @@
 """Clipping engine: video URL or file -> transcript -> best moments -> captioned, speaker-framed 9:16 clips
-with thumbnails and per-platform post copy.
+with thumbnails and per-platform post copy. Run by the worker (jobs.py).
 
-usage: python clipper.py <url-or-file> [-n auto] [--min 30] [--max 60] [-o out/<source>]
 needs ffmpeg + ffprobe on PATH and GROQ_API_KEY + DEEPSEEK_API_KEY in the environment or .env
 """
-import argparse
 import hashlib
 import json
 import math
@@ -21,7 +19,6 @@ from pydantic import BaseModel
 
 cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 HERE = Path(__file__).parent
-WORK = HERE / "work"
 FONTS = HERE / "fonts"  # Montserrat ExtraBold, SIL OFL (fonts/OFL.txt)
 FACE_MODEL = HERE / "models" / "face_detection_yunet_2026may.onnx"  # MIT, opencv_zoo
 CHUNK, OVERLAP = 600, 10  # seconds of audio per STT request, plus overlap past each seam (Groq's chunking advice)
@@ -127,9 +124,9 @@ def duration_of(media: Path) -> float:
                                  str(media)], capture_output=True, text=True, check=True).stdout)
 
 
-def acquire(source: str, root: Path = WORK) -> tuple[Path, Path]:
+def acquire(source: str, root: Path) -> tuple[Path, Path]:
     """Return (video, work dir). The work dir under `root` is named by content id (Youtube-<id>, file hash): that name
-    is the transcript cache key, and reruns reuse the download."""
+    is the transcript cache key."""
     if Path(source).is_file():
         with open(source, "rb") as f:
             work = root / hashlib.file_digest(f, "sha256").hexdigest()[:16]
@@ -359,20 +356,9 @@ def render(video: Path, start: float, end: float, out: Path, words: list[dict], 
     ffmpeg("-ss", "1", "-i", out.name, "-frames:v", "1", "-q:v", "3", out.with_suffix(".jpg").name, cwd=out.parent)
 
 
-def disk_transcript(key: str) -> dict | None:
-    path = WORK / key / "transcript.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
-
-
-def save_disk_transcript(key: str, transcript: dict):
-    (WORK / key / "transcript.json").write_text(json.dumps(transcript, ensure_ascii=False), encoding="utf-8")
-
-
-def run(source: str, out: Path | None = None, n: int | None = None, min_len: float = 30, max_len: float = 60,
-        progress=lambda stage, detail="": print(stage, detail),
-        load_transcript=disk_transcript, save_transcript=save_disk_transcript,
-        work_root: Path = WORK, max_seconds: float | None = None, max_clips: int | None = None
-        ) -> tuple[str, Path, list[Clip]]:
+def run(source: str, out: Path, n: int | None = None, min_len: float = 30, max_len: float = 60, *,
+        progress, load_transcript, save_transcript, work_root: Path,
+        max_seconds: float | None = None, max_clips: int | None = None) -> tuple[str, Path, list[Clip]]:
     """The whole pipeline. `progress(stage, detail)` is called at every step (it may raise to cancel); transcripts
     are cached by source key through load/save; downloads go under `work_root`. `max_seconds` / `max_clips` cap the
     source length and clip count (plan allowances), checked before anything is paid for.
@@ -395,7 +381,6 @@ def run(source: str, out: Path | None = None, n: int | None = None, min_len: flo
     n = n or max(3, min(30, round(transcript["segments"][-1]["end"] / 360)))
     clips = find_clips(transcript, n if max_clips is None else min(n, max_clips), min_len, max_len)
 
-    out = out or HERE / "out" / key
     out.mkdir(parents=True, exist_ok=True)
     for i, clip in enumerate(clips, 1):
         progress("rendering", f"clip {i} of {len(clips)}")
@@ -404,27 +389,3 @@ def run(source: str, out: Path | None = None, n: int | None = None, min_len: flo
     (out / "clips.json").write_text(json.dumps([c.model_dump() for c in clips], indent=2, ensure_ascii=False),
                                     encoding="utf-8")
     return key, out, clips
-
-
-def main():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("source", help="video URL or local file")
-    p.add_argument("-n", type=int, help="clips to make (default: ~1 per 6 min, 3-30)")
-    p.add_argument("--min", type=float, default=30, help="target min clip seconds")
-    p.add_argument("--max", type=float, default=60, help="target max clip seconds")
-    p.add_argument("-o", "--out", type=Path, help="output dir (default: out/<source key>)")
-    args = p.parse_args()
-    load_env()
-    if missing := [k for k in ("GROQ_API_KEY", "DEEPSEEK_API_KEY") if not os.environ.get(k)]:
-        sys.exit(f"missing {', '.join(missing)}: paste them into {HERE / '.env'}")
-    try:
-        _, out, clips = run(args.source, args.out, args.n, args.min, args.max)
-    except PermanentError as e:
-        sys.exit(str(e))
-    for i, clip in enumerate(clips, 1):
-        print(f"clip{i:02}  {clip.end - clip.start:5.1f}s  score {clip.score}  {clip.title}")
-    print(f"done  {out}")
-
-
-if __name__ == "__main__":
-    main()

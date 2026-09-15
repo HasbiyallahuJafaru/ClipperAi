@@ -1,6 +1,16 @@
 # Build memory
 
-Last updated: 2026-09-15. Update after every milestone: move items from "Left" to "Done" with how they were verified.
+Last updated: 2026-09-15 (end of session 4: Phase 7 + real Buffer tests + Telegram/CLI scrapped). Update after every
+milestone: move items from "Left" to "Done" with how they were verified.
+
+## At a glance
+- **Built:** engine, jobs/worker, R2 storage, website (submit, review, ZIP, pricing/billing with payments off),
+  publishing through Buffer, content calendar. Channels: **website + MCP only** (Telegram bot and CLI scrapped).
+- **Uncommitted:** Phase 7 (calendar) and the Telegram/CLI removal. Last push: Phase 6 (f3c2e51). Commit when asked.
+- **Next:** Phase 8 MCP server → Phase 9 accounts (sign-in, MCP tokens, cost tracking, payments when asked) → Phase 10
+  deploy + hardening. Smaller: Buffer 10-scheduled-post cap handling, brand settings page, video titles, hook re-render.
+- **Not proven on real services:** a full project end to end on real R2 (Avast blocks it here), Instagram posting,
+  recovery from a real Buffer 429, a person using the site in a normal browser.
 
 ## Done
 
@@ -177,6 +187,76 @@ Last updated: 2026-09-15. Update after every milestone: move items from "Left" t
 - **Not verified:** Instagram posting for real (needs a creator/business account), TikTok/Facebook/X/LinkedIn on real
   channels (Facebook reels on Pages/Groups); real 429 headers; r2.dev rate limits under load.
 
+### Phase 7 — Content calendar (2026-09-15, not committed yet)
+- Design (ponytail): no new table, no migration. A calendar post is a `publications` row with `status = 'queued'`
+  (no Buffer id) that the worker hands to Buffer; the calendar view is the project's publications grouped by day.
+- `publishing.py`: `Calendar` (channels, days 1–7 ISO, times ≤6, start date, IANA `timezone` validated with
+  `zoneinfo`); `slots` (weekday × time from `start` in that zone, DST-correct, between now + `EARLIEST` 30 min and
+  `schedule_until`); `plan` (approved clips with no non-error post, clip order, skips times any chosen channel already
+  has a post at across projects, so a second calendar continues after the first; `left` = clips that didn't fit;
+  refusals: expired, nothing approved/everything scheduled, no time in window 422); `schedule` (plan + `ready()` channel
+  check + one transaction of `insert ... on conflict (project_id, clip_idx, channel_id) where status <> 'error' do
+  nothing`); `send_queued` (claims the soonest queued row `FOR UPDATE SKIP LOCKED` → `sending`; due < 1 min → error
+  "couldn't be handed to Buffer before its time"; public copy + createPost like `publish`; **PublishError caused by
+  `TimeoutError` = Buffer received it but never answered → error, never retried (double post)**; any other failure →
+  back to `queued` and re-raised); `ready()` extracted from `publish` (public bucket config + channels lookup + usable);
+  `remove` deletes a queued row only if still queued (else "being handed to Buffer right now").
+- `jobs.work` starts a `send_posts` thread (sleep 5 s when idle, 60 s after any error); `import publishing` inside
+  `work()` (publishing imports jobs). `content_package` adds `calendar.csv` (every post: due_at UTC, clip_idx, title,
+  network with twitter→x, channel_name, status, external_link, error). API: `POST /api/projects/{id}/calendar/plan`,
+  `POST /api/projects/{id}/calendar` (201). `requirements.txt` + `tzdata`.
+- Website: `/projects/[id]/calendar` (form: channels via shared `ChannelChoices`, weekday toggles = sr-only checkboxes
+  in labels styled with `has-checked:` like pressed buttons, times list with Add/Remove, start date, "In your time zone,
+  X"; Preview → day-by-day list + "Schedule N posts"; any form change drops the preview; "Scheduled and posted" list
+  grouped by day, then by displayed minute + clip, rows = `PostList compact`). Project page: "Schedule all" (approved
+  clips not on the calendar) else "Calendar" when posts exist. `waiting` includes queued; state "Scheduling...".
+- Verified: `test_jobs.py` ok (validation incl. path-like zones; plan checked against a brute-force half-hour scan in
+  Asia/Tokyo; later start; window edge + `left`; >30 days 422; schedule makes 2 Buffer calls only; duplicates refused;
+  publications() doesn't ask Buffer about queued rows; delete guard; remove queued without Buffer; rate limit →
+  requeued; worker creates each post with its exact dueAt + public copy; refusal, no-answer timeout (not resent), missed
+  time; a later clip skips TikTok's busy times; calendar.csv rows/order; expired refusal; cleanup leaves no copies).
+  Mutation check: removing the busy-time filter fails the test. Scratch probes: `TimeoutError` vs `URLError` causes from
+  `call()`; zoneinfo DST (New York 09:00 → 13:00/14:00 UTC). `test_clipper.py` ok; `next build` ok; `check.mjs` ok (new
+  routes 404/422, calendar page 200); **`walkthrough.mjs` passed end to end** against `dev.py --fake-buffer` (clip 2
+  un-rejected + approved → Schedule all → Instagram + X, Mon/Wed/Fri, 09:00 + 18:00 → preview "Clip 02 / Instagram, X"
+  → toggling a day drops preview → Schedule 2 posts → worker → both `scheduled` Wed 09:00 local → package has
+  calendar.csv → Unschedule both → form returns). Screenshots light desktop/preview + dark 390 px checked; fixed
+  "post now" posts seconds apart showing as two entries; re-checked. impeccable detector: no findings. Dev DB cleaned
+  (back to 4 old projects, no plan, no publications).
+- **Real Buffer + R2 verified (2026-09-15, user said "lets test this"):** scratch `real_fixture.py` (project A 1 clip,
+  project B 30 clips, 5 s 1080×1920 test video on real `clipperai`, all approved, text "ClipperAi calendar test") +
+  `uvicorn api:app` + separate `python jobs.py` worker + `npm run start` + scratch `real_calendar.mjs` (headless Edge):
+  calendar page → YouTube "The Micro-Fix", all days, 09:00 Africa/Lagos, start +3 days → Preview → Schedule 1 post →
+  worker created it in Buffer ~3.5 s later (`scheduled`, dueAt 2026-09-18T08:00:00.000Z, calendar text; public copy in
+  `clipperai-published`) → page showed "Fri, Sep 18 · 9:00 AM · YouTube · The Micro-Fix · Scheduled" → Unschedule on
+  the page → Buffer `post` NOT_FOUND, public bucket 0 objects, nothing waiting in Buffer. Buffer's `posts` query
+  filters by `status` (`posts(first, input: {organizationId, filter: {status: [scheduled, ...], channelIds}})`).
+- **30-post batch against real Buffer (2026-09-15, user said "run the real buffer test"):** `real_batch.py` scheduled
+  project B's 30 clips on YouTube (all days, 08:00–18:00 every 2 h Africa/Lagos, from Sep 18) through the real API;
+  schedule answered 201 in 5.8 s; the separate worker handed all 30 to Buffer in ~101 s (~3.4 s each), no exceptions
+  in its log. **Buffer's plan caps scheduled posts: 10 accepted, 20 refused with "Scheduled posts limit reached. You
+  have 10 scheduled posts out of 10 allowed."** (recorded as `error` rows with that reason; per channel or per account
+  not checked). Improvement to consider: stop sending the rest of the queue for that channel after this refusal (saves
+  requests) and say it on the calendar page before scheduling more than the plan allows.
+- **Blocked, not verified:** the real 429 test. After the batch, the permission classifier denied every further command
+  in the flow ("Real-World Transactions"), even read-only checks (Buffer post list, local DB query). Worker stopped;
+  API left running on :8000 for cleanup. Scripts in the session scratchpad: `real_cleanup.py <project>...`
+  (unschedules through the API, deletes projects, checks Buffer + buckets empty), `real_limit.py`, `real_watch.py`.
+- **Cleanup done (2026-09-15, user asked):** `real_cleanup.py` through the real API: 10 scheduled posts unscheduled
+  (204, Buffer deletePost), 20 failed rows dismissed, both test projects deleted (204), storage prefixes 0 files,
+  public bucket 0 objects, Buffer `posts` with status scheduled/sending/needs_approval/draft: 0. API and worker stopped.
+  Dev DB is back to the 4 old projects.
+
+### Scrapped: Telegram bot and command-line tool (2026-09-15, user decision)
+- Telegram existed only as a plan (docs, one `billing.py` docstring): removed from CLAUDE.md, README, handover, memory.
+- CLI removed from `clipper.py`: `main()`/argparse, and the defaults only it used (`WORK` = `work/` download cache,
+  `disk_transcript`/`save_disk_transcript`, `out/<source key>` default, printing progress). `run()` now takes
+  `progress`, `load_transcript`, `save_transcript`, `work_root` as required keyword arguments (the worker passes them);
+  `acquire(source, root)` needs `root`. `jobs.run_job` passes them by name; `test_clipper.py` passes them too.
+- Left on disk, untracked: `apps/backend/out/` (30 MB, old CLI clips) and `work/` (185 MB, downloaded YouTube videos +
+  transcripts); still in `.gitignore` so they can't be committed. Delete them when the user agrees.
+- Verified: `test_clipper.py` ok, `test_jobs.py` ok after the change.
+
 ### Repo (2026-09-14)
 - Pushed to https://github.com/HasbiyallahuJafaru/ClipperAi (public, `main`, first commit 402473e) with README,
   `.env.example`, description and topics. Layout: `apps/backend`, `apps/website` (empty), `apps/mcp` (empty).
@@ -198,16 +278,23 @@ Last updated: 2026-09-15. Update after every milestone: move items from "Left" t
       (scratch script): server upload + HEAD size, 24 h signed GET (Content-Disposition attachment, video/mp4), 7-day
       signed GET, streamed read, CORS preflight 204 `*`, signed PUT + worker download, wrong content type → 403,
       delete_prefix, bucket empty after. `test_jobs.py` ok after the rule change.
+- [ ] **Commit + push** Phase 7 (calendar) and the Telegram/CLI removal (when the user asks).
 - [ ] **Rotate the R2 token**: the user pasted its values into the chat. Create a new one (ideally "Apply to specific
-      buckets only: clipperai"), put it in `.env`, delete the old one in Cloudflare.
+      buckets only: clipperai, clipperai-published"), put it in `.env`, delete the old one in Cloudflare.
+- [ ] User: delete the 3 Phase 6 test videos on "The Micro-Fix" (public NbWBjHIFG2M, VHLmTNy7Ex8; private uVqdDp9WFvc).
+- [ ] User: delete the old CLI folders `apps/backend/out/` (30 MB) and `work/` (185 MB) when no longer wanted; then the
+      `work/` and `out/` lines can leave `.gitignore`.
+- [ ] User: choose a code license (public repo, no license file).
 - [ ] Not yet on real R2: a large (tens of MB, multipart) clip upload through Avast, and a full project processed end
       to end (costs Groq/DeepSeek cents; Avast may block yt-dlp/DeepSeek, so use the upload path).
 - [ ] Upgrade Groq to Developer plan before real customers (free plan: 20 req/min, 7,200 audio-s/hour,
       28,800 audio-s/day shared across all customers).
 
-### Product direction (decided 2026-09-14, beyond masterprompt.md)
-- Three access channels on one account/subscription/usage balance: **website**, **MCP**, **Telegram bot** (planned).
-- **Payments happen only on the website** (subscriptions). MCP and Telegram use the product; they never take payment.
+### Product direction (decided 2026-09-14, narrowed 2026-09-15, beyond masterprompt.md)
+- **Only two ways to use the product: website and MCP**, on one account/subscription/usage balance. The user scrapped
+  the planned Telegram bot and the command-line tool on 2026-09-15 (don't build other channels). The REST API is the
+  website's backend, not a channel.
+- **Payments happen only on the website** (subscriptions). MCP uses the product; it never takes payment.
 - MCP location: `apps/mcp` if it needs its own deployable, else inside the backend (default). Decide in Phase 8.
 - Limits/subscription checks enforced once in backend services so every channel gets identical rules.
 
@@ -215,15 +302,15 @@ Last updated: 2026-09-15. Update after every milestone: move items from "Left" t
 - [ ] **Unblock local end-to-end** (user action): Avast Web Shield currently cuts local HTTP downloads > ~1–2 MB and
       breaks yt-dlp HTTPS (see gotchas). Add Avast exceptions (or pause Web Shield) then run a real link + upload
       project through `dev.py` + website and click through review in a real browser.
-- [ ] Add `calendar.csv` to the content package when Phase 7 exists.
-- [ ] Remaining §39 pages when their phases land: calendar (7), settings/integrations (6), brand.
+- [x] `calendar.csv` in the content package (Phase 7).
+- [ ] Remaining §39 pages when their phases land: brand. (Calendar and settings/integrations exist.)
 - [ ] Nice to have: store the video title (yt-dlp info / upload filename) so lists don't show URLs/"Uploaded video";
       re-render with an edited hook ("Render all", §40); a real product visual on the landing page (a clip from a
       video we have rights to).
 - [ ] **Real payments** (only when the user asks): provider with hosted checkout + webhooks (no card data on our
       servers) → start checkout in `billing.subscribe`, activate from webhook, billing period instead of calendar
       month, cancel at period end, invoices from the provider. Confirm Pro/Business prices with the user.
-- [ ] Account area to connect other channels: create/rotate MCP tokens, link a Telegram account (one-time code).
+- [ ] Account area for MCP: create/rotate MCP tokens.
 - [ ] Needs from backend: user accounts/auth (replace shared API_KEY; then the website proxy must check the signed-in
       user instead of injecting one key). Until then the website must not be deployed publicly.
 
@@ -238,24 +325,29 @@ Last updated: 2026-09-15. Update after every milestone: move items from "Left" t
 - [x] Committed + pushed Phase 6 (2026-09-15, user asked).
 
 ### Phase 7 — Content calendar
-- [ ] Frequency/days/times/start date/platforms → distribute approved clips; list-style calendar UI; calendar.csv;
-      "Schedule all" (§40). Reuse `publishing.publish` per slot.
+- [x] Days/times/start date/channels → approved clips spread over free times; list calendar UI; calendar.csv;
+      "Schedule all" (2026-09-15, see Done). Queued posts go to Buffer through the worker (solves the 100/15 min limit).
 - [x] Link-expiry blocker solved in Phase 6 by public copies: posts can be scheduled up to 30 days ahead, and a copy
       outlives the 30-day `projects/` rule (45-day backstop). A calendar longer than 30 days would need `AHEAD` and
       `PUBLIC_DAYS` raised together.
-- [ ] Batch publishing many clips = many Buffer calls (100/15 min): consider the worker queue if it gets slow.
+- [x] One real calendar post through the page + worker to real Buffer, then unscheduled (2026-09-15, see Done).
+- [x] 30-post batch against real Buffer (2026-09-15): worker fine; Buffer plan caps scheduled posts at 10.
+- [x] Removed the 10 real scheduled test posts and deleted test projects A/B (2026-09-15, Buffer shows 0 waiting).
+- [ ] Real 429 test: blocked by the permission classifier (the user would need to allow it or run it themselves).
+- [ ] **Buffer's scheduled-posts cap (10 on this plan):** user decides: upgrade Buffer, and/or make the calendar stop
+      sending a channel's queue after "Scheduled posts limit reached" (saves ~1 request per refused post) and warn
+      before scheduling more than fits.
+- [ ] Maybe: one calendar across all projects (today it's per project; busy times are already checked across projects),
+      per-slot channel choice (spec example shows different networks per day), "Unschedule all".
 
 ### Phase 8 — MCP (`apps/mcp` or inside backend — decide here)
 - [ ] Official `mcp` Python SDK, Streamable HTTP at `/mcp`, authenticated with per-user tokens issued on the website;
-      high-level tools (repurpose_video, get_project_status, list_projects, generate_content_package,
-      create_content_calendar, schedule_content) calling `jobs.py` services; same limits as the website.
-
-### Telegram bot (planned channel, after MCP)
-- [ ] Bot calls the same backend services; users link Telegram to their website account (one-time code); no payments
-      in the bot — unsubscribed users get a link to the website.
-- [ ] Flow: send a video link (or file) → project created → bot reports progress → sends clips/links + post copy.
-- [ ] Check Telegram Bot API limits at build time (cloud Bot API: bots download files ≤20 MB, upload ≤50 MB), so large
-      videos go via link or website upload, and clips may need to be sent as signed links.
+      high-level tools calling the existing services with the same limits as the website: repurpose_video →
+      `jobs.create_project` (link; uploads need a signed upload link), get_project_status / list_projects → `jobs`,
+      generate_content_package → package link, create_content_calendar → `publishing.plan`, schedule_content →
+      `publishing.schedule`.
+- [ ] Decide with the user: where it lives (default: mounted in the FastAPI backend) and what it authenticates with
+      until accounts exist (only the shared `API_KEY` today; MCP must never be anonymous).
 
 ### Phase 9 — Billing & usage
 - [x] Plans + monthly limits for one workspace, enforced in backend services (2026-09-14, see Done).
@@ -282,6 +374,9 @@ Last updated: 2026-09-15. Update after every milestone: move items from "Left" t
   gone (retry from ClipperAi instead); if Buffer creates a post
   but the reply times out, the row says error and a retry can post twice; a crash between inserting a publication and
   Buffer's answer leaves a `sending` row with no Buffer id (blocks that clip×channel until removed via DELETE).
+- Calendar: every clip goes to the same channels at the same time; clips in clip order (not score); a `sending` calendar
+  row with no Buffer id after a worker crash stays until removed through the API; the worker waits 60 s after any
+  error (one global backoff, not Buffer's Retry-After); an approved clip un-approved after scheduling still goes out.
 - Billing: one workspace; calendar-month usage; running projects don't reserve allowance (a month can overshoot by one
   video); minutes = speech length of completed projects; ZIP bytes flow through the API server.
 - STT fallback when needed: onnx-asr + Parakeet v3 on CPU (~$0.01/audio-hr, European languages only).
@@ -349,6 +444,13 @@ Last updated: 2026-09-15. Update after every milestone: move items from "Left" t
   `organizations`): keep `publishing.py`'s documents containing those words or extend the fake.
 - Walkthrough race: text that appears on a busy button ("Posting...") also matches `has()`; wait on the specific
   region (`section[aria-label=Posts]`).
+- **pgserver's Windows Postgres has no time zone files** (`pg_timezone_names` → "could not open directory
+  .../share/postgresql/timezone"; `at time zone 'America/New_York'` → not recognized). Do time zone math in Python
+  (`zoneinfo` + `tzdata`), not SQL, or tests/dev break while Railway Postgres would work.
+- `urllib` + a server that takes the request but never answers → bare `TimeoutError` (from `getresponse`); connection
+  refused / connect timeout → `URLError`. `publishing.call` keeps it as `PublishError.__cause__`.
+- Walkthrough race: after a clip action the re-rendered button can still be `disabled` (busy until the request's
+  `finally`); wait for `!b.disabled` before clicking.
 - Next.js 16 ships its docs in `apps/website/node_modules/next/dist/docs/` (route handlers take
   `RouteContext<"/api/[...path]">`, params are Promises, `middleware` is now `proxy`).
 

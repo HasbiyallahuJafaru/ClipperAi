@@ -1,6 +1,6 @@
 // Clicks through the website in headless Edge like a person would (DevTools protocol, no extra packages): no plan ->
 // refused, pricing -> checkout -> plan, switch plan, batch links, batch uploads, review, copy, Download all, publish
-// and schedule, cancel.
+// and schedule, content calendar, cancel.
 // Needs `python dev.py --fake-buffer` + `npm run start` running and fixture data (changes the dev database):
 //   cd apps/backend && python dev_fixture.py      -> prints <project id> <media folder>
 //   cd apps/website && node walkthrough.mjs <project id> <media folder>
@@ -266,7 +266,58 @@ try {
   assert.deepEqual(posts.map((p) => p.service).sort(), ["tiktok", "youtube"]);
   ok(`Schedule X for ${due}: shows Scheduled for, Unschedule removes it`);
 
-  // 8. cancel the plan
+  // 8. content calendar: clip 2 back from rejected, then Schedule all on two channels through the worker
+  await click("Rejected");
+  await until(`[...document.querySelectorAll("button")].filter((b) => b.textContent === "Approve" && !b.disabled).length === 1`, "clip 2 pending");
+  await click("Approve");
+  await has("Schedule all");
+  await click("Schedule all");
+  await at(`/projects/${PROJECT}/calendar`);
+  await has("Schedule 1 approved clip");
+  await until(`!!document.querySelector("input[value=channel-twitter]")`, "the channels");
+  await tick("channel-twitter");
+  await tick("channel-instagram");
+  await click("Add a time");
+  await until(`document.querySelectorAll("input[type=time]").length === 2`, "a second time");
+  await click("Preview");
+  await has("Schedule 2 posts");
+  const preview = await js("document.body.innerText");
+  assert.ok(preview.includes("Clip 02") && preview.includes("Instagram, X"), preview);
+  await shot("cdp-calendar-preview");
+  const toggleTuesday = () => js(`document.querySelector("input[name=day][value='2']").click() || true`);
+  await toggleTuesday();
+  await until(`!document.body.innerText.includes("Schedule 2 posts")`, "a changed form to drop the preview");
+  await toggleTuesday();
+  await click("Preview");
+  await has("Schedule 2 posts");
+  await click("Schedule 2 posts");
+  const calendarText = `(document.querySelector("section[aria-labelledby=calendar-list]")?.innerText ?? "")`;
+  const scheduledCount = `(${calendarText}.match(/^Scheduled$/gm) || []).length`;
+  await until(`${scheduledCount} === 2 && !${calendarText}.includes("Scheduling...")`, "the worker to hand both posts to Buffer", 30000);
+  posts = (await api(`projects/${PROJECT}/publications`)).publications.filter((p) => p.clip_idx === 2);
+  assert.deepEqual(posts.map((p) => `${p.service} ${p.status}`).sort(), ["instagram scheduled", "twitter scheduled"]);
+  const slot = await js(`(() => { const d = new Date(${JSON.stringify(posts[0].due_at)}); return [d.getDay(), d.getHours(), d.getMinutes()]; })()`);
+  assert.ok([1, 3, 5].includes(slot[0]) && [9, 18].includes(slot[1]) && slot[2] === 0 && posts[0].due_at === posts[1].due_at,
+            JSON.stringify([slot, posts]));
+  await has("Every approved clip is on the calendar.");
+  await shot("cdp-calendar");
+  await shot("cdp-calendar-phone", 390, true);
+  const packaged = await js(`fetch("/api/projects/${PROJECT}/package").then((r) => r.arrayBuffer())
+    .then((b) => new TextDecoder("latin1").decode(b).includes("calendar.csv"))`);
+  assert.ok(packaged, "Download all carries calendar.csv");
+  ok(`calendar: preview (Clip 02 on Instagram, X), a form change drops it, scheduled -> worker -> Buffer (day ${slot[0]}, ${slot[1]}:00), package has calendar.csv`);
+
+  await js("window.confirm = () => true");
+  await click("Unschedule");
+  await until(`${scheduledCount} === 1`, "one calendar post to go");
+  await click("Unschedule");
+  await has("Schedule 1 approved clip");
+  assert.equal((await api(`projects/${PROJECT}/publications`)).publications.filter((p) => p.clip_idx === 2).length, 0);
+  await go(`/projects/${PROJECT}`);
+  await has("Schedule all");
+  ok("unscheduled both from the calendar: the clip can be scheduled again, project page offers Schedule all");
+
+  // 9. cancel the plan
   await go("/settings/billing");
   await has("Cancel plan");
   await js("window.confirm = () => true");

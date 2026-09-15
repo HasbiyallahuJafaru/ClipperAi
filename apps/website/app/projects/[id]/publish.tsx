@@ -28,7 +28,51 @@ export function useChannels(): Channels {
 
 /** Still on its way out: worth asking the backend again soon. */
 export const waiting = (post: Publication) =>
-  post.status === "sending" || (post.status === "scheduled" && new Date(post.due_at!) <= new Date());
+  post.status === "queued" || post.status === "sending" || (post.status === "scheduled" && new Date(post.due_at!) <= new Date());
+
+/** The Buffer channels as checkboxes named "channel". `reason(channel)` says why one can't be chosen ("" if it can). */
+export function ChannelChoices({ channels, reason }: { channels: Channels; reason: (channel: Channel) => string }) {
+  if (channels.error) {
+    return (
+      <p role="alert" className="mt-2 text-danger">
+        {channels.error} <Link href="/settings/integrations" className="link text-ink">Publishing settings</Link>
+      </p>
+    );
+  }
+  if (!channels.list) {
+    return (
+      <div className="mt-2 grid gap-2" aria-label="Loading channels">
+        {[0, 1, 2].map((i) => <div key={i} className="h-9 max-w-sm rounded-md bg-line motion-safe:animate-pulse" />)}
+      </div>
+    );
+  }
+  if (channels.list.length === 0) {
+    return (
+      <p className="mt-2">
+        No social accounts are connected in Buffer yet.{" "}
+        <a href="https://publish.buffer.com" target="_blank" rel="noreferrer" className="link">Connect one in Buffer</a>,
+        then reload this page.
+      </p>
+    );
+  }
+  return (
+    <ul className="mt-2 grid">
+      {channels.list.map((channel) => {
+        const why = reason(channel);
+        return (
+          <li key={channel.id}>
+            <label className={`grid min-h-11 grid-cols-[1rem_5.5rem_minmax(0,1fr)] content-center items-center gap-x-3 py-1 sm:grid-cols-[1rem_5.5rem_minmax(0,1fr)_auto] ${why ? "text-muted" : "cursor-pointer"}`}>
+              <input type="checkbox" name="channel" value={channel.id} disabled={!!why} className="size-4" />
+              <span className={`font-medium ${why ? "" : "text-ink"}`}>{network(channel.service)}</span>
+              <span className="truncate">{channel.displayName || channel.name}</span>
+              {why && <span className="col-start-3 text-sm sm:col-start-4">{why}</span>}
+            </label>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 export function PublishForm({ projectId, clip, posts, channels, until, onSent, onClose }: {
   projectId: string;
@@ -72,39 +116,11 @@ export function PublishForm({ projectId, clip, posts, channels, until, onSent, o
       <fieldset className="grid gap-1">
         <legend className="text-sm font-medium">Where</legend>
         <p className="text-sm text-muted">Each network gets the post written for it.</p>
-        {channels.error ? (
-          <p role="alert" className="mt-2 text-danger">
-            {channels.error} <Link href="/settings/integrations" className="link text-ink">Publishing settings</Link>
-          </p>
-        ) : !channels.list ? (
-          <div className="mt-2 grid gap-2" aria-label="Loading channels">
-            {[0, 1, 2].map((i) => <div key={i} className="h-9 max-w-sm rounded-md bg-line motion-safe:animate-pulse" />)}
-          </div>
-        ) : channels.list.length === 0 ? (
-          <p className="mt-2">
-            No social accounts are connected in Buffer yet.{" "}
-            <a href="https://publish.buffer.com" target="_blank" rel="noreferrer" className="link">Connect one in Buffer</a>,
-            then reload this page.
-          </p>
-        ) : (
-          <ul className="mt-2 grid">
-            {channels.list.map((channel) => {
-              const post = taken.get(channel.id);
-              const reason = !post ? unusable(channel)
-                : post.status === "sent" || post.status === "sending" ? "Already posted" : "Already scheduled";
-              return (
-                <li key={channel.id}>
-                  <label className={`grid min-h-11 grid-cols-[1rem_5.5rem_minmax(0,1fr)] content-center items-center gap-x-3 py-1 sm:grid-cols-[1rem_5.5rem_minmax(0,1fr)_auto] ${reason ? "text-muted" : "cursor-pointer"}`}>
-                    <input type="checkbox" name="channel" value={channel.id} disabled={!!reason} className="size-4" />
-                    <span className={`font-medium ${reason ? "" : "text-ink"}`}>{network(channel.service)}</span>
-                    <span className="truncate">{channel.displayName || channel.name}</span>
-                    {reason && <span className="col-start-3 text-sm sm:col-start-4">{reason}</span>}
-                  </label>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <ChannelChoices channels={channels} reason={(channel) => {
+          const post = taken.get(channel.id);
+          return !post ? unusable(channel)
+            : post.status === "sent" || post.status === "sending" ? "Already posted" : "Already scheduled";
+        }} />
       </fieldset>
 
       <fieldset className="grid gap-1">
@@ -138,22 +154,25 @@ export function PublishForm({ projectId, clip, posts, channels, until, onSent, o
   );
 }
 
-function state(post: Publication) {
+/** `dated`: say when (left out where the time is already shown, as on the calendar). */
+function state(post: Publication, dated: boolean) {
   switch (post.status) {
+    case "queued": return "Scheduling...";
     case "sending": return "Posting...";
-    case "scheduled": return `Scheduled for ${when(post.due_at!)}`;
-    case "sent": return post.sent_at ? `Posted ${when(post.sent_at)}` : "Posted";
+    case "scheduled": return dated ? `Scheduled for ${when(post.due_at!)}` : "Scheduled";
+    case "sent": return post.sent_at && dated ? `Posted ${when(post.sent_at)}` : "Posted";
     case "error": return `Didn't post: ${post.error ?? "Buffer didn't say why."}`;
     default: return "Waiting for approval in Buffer";
   }
 }
 
-export function PostList({ posts, onChange }: { posts: Publication[]; onChange: () => void }) {
+/** A clip's posts with their state and actions. `compact`: no heading and no dates, for the calendar. */
+export function PostList({ posts, onChange, compact = false }: { posts: Publication[]; onChange: () => void; compact?: boolean }) {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
   async function remove(post: Publication) {
-    if (post.status !== "error" && !confirm(`Unschedule the ${network(post.service)} post? Buffer won't send it.`)) return;
+    if (post.status !== "error" && !confirm(`Unschedule the ${network(post.service)} post? It won't be sent.`)) return;
     setBusy(post.id);
     setError("");
     try {
@@ -167,14 +186,14 @@ export function PostList({ posts, onChange }: { posts: Publication[]; onChange: 
   }
 
   return (
-    <section className="mt-8 max-w-2xl" aria-label="Posts">
-      <h4 className="text-sm font-medium">Posts</h4>
-      <ul className="mt-2 grid gap-3 sm:gap-2" aria-live="polite">
+    <section className={compact ? "mt-2" : "mt-8 max-w-2xl"} aria-label="Posts">
+      {!compact && <h4 className="text-sm font-medium">Posts</h4>}
+      <ul className={`grid gap-3 sm:gap-2 ${compact ? "" : "mt-2"}`} aria-live="polite">
         {posts.map((post) => (
           <li key={post.id} className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-baseline gap-x-4 sm:grid-cols-[5.5rem_minmax(0,9rem)_minmax(0,1fr)_auto]">
             <span className="font-medium">{network(post.service)}</span>
             <span className="truncate text-muted">{post.channel_name}</span>
-            <span className={`col-span-2 sm:col-span-1 ${post.status === "error" ? "text-danger" : ""}`}>{state(post)}</span>
+            <span className={`col-span-2 sm:col-span-1 ${post.status === "error" ? "text-danger" : ""}`}>{state(post, !compact)}</span>
             <span className="col-span-2 flex gap-4 text-sm empty:hidden sm:col-span-1">
               {post.external_link && (
                 <a href={post.external_link} target="_blank" rel="noreferrer" className="link inline-flex min-h-11 items-center sm:min-h-0">View post</a>

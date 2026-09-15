@@ -86,14 +86,19 @@ export type Publication = {
   channel_id: string;
   service: string;
   channel_name: string;
-  status: "sending" | "scheduled" | "sent" | "error" | "draft" | "needs_approval";
+  status: "queued" | "sending" | "scheduled" | "sent" | "error" | "draft" | "needs_approval"; // queued: not in Buffer yet
   due_at: string | null;
   sent_at: string | null;
   external_link: string | null;
   error: string | null;
+  created_at: string;
 };
 
 export type Publications = { publications: Publication[]; schedule_until: string | null };
+
+// Content calendar: POST projects/{id}/calendar/plan answers with this; POST projects/{id}/calendar queues it.
+export type CalendarRequest = { channels: string[]; days: number[]; times: string[]; start: string; timezone: string };
+export type CalendarPlan = { posts: { clip_idx: number; title: string; due_at: string }[]; left: number[] };
 
 const NETWORKS: Record<string, string> = {
   tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube", linkedin: "LinkedIn", facebook: "Facebook",

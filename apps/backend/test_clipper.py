@@ -82,10 +82,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [round(d) for d in calls] == [12, 12, 5], calls
 
     # plan allowances: a too-long source stops before transcription; the clip count is capped before selection
-    def never(_):
+    def never(*_):
         raise AssertionError("must stop before transcription")
+    engine = {"progress": lambda *_: None, "save_transcript": never, "work_root": Path(tmp)}
     try:
-        clipper.run(str(src), Path(tmp) / "out", load_transcript=never, work_root=Path(tmp), max_seconds=10)
+        clipper.run(str(src), Path(tmp) / "out", load_transcript=never, max_seconds=10, **engine)
         raise AssertionError("accepted a source longer than the allowance")
     except clipper.PermanentError as e:
         assert "minutes of video are left" in str(e)
@@ -93,8 +94,8 @@ with tempfile.TemporaryDirectory() as tmp:
     clipper.find_clips, real_find = lambda transcript, n, *_: asked.append(n) or [], clipper.find_clips
     try:
         hour = {"language": "en", "words": [], "segments": [{"start": 0, "end": 3600, "text": "x"}]}
-        clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, work_root=Path(tmp), max_clips=4)
-        clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, work_root=Path(tmp))
+        clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, max_clips=4, **engine)
+        clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, **engine)
     finally:
         clipper.find_clips = real_find
     assert asked == [4, 10], asked

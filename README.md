@@ -13,8 +13,8 @@ and write the copy; FFmpeg, OpenCV and libass do the cutting, cropping and capti
 
 > **Status:** the backend engine, job system and storage layer are built and tested. The website works locally:
 > submit one or many videos, follow progress, review clips, download everything as a ZIP, publish or schedule approved
-> clips through Buffer, and choose a plan (pricing, checkout, billing, usage limits; payments are switched off, so plans
-> are free for now). The content calendar, accounts, the MCP server and the Telegram bot are next. See
+> clips through Buffer, spread them over a content calendar, and choose a plan (pricing, checkout, billing, usage
+> limits; payments are switched off, so plans are free for now). The MCP server and accounts are next. See
 > [Status and roadmap](#status-and-roadmap).
 
 ---
@@ -80,17 +80,16 @@ flowchart LR
 
 ## Ways to use ClipperAi
 
-One account, one subscription and one usage balance, reachable three ways:
+One account, one subscription and one usage balance, reachable two ways:
 
 | Channel | What it's for | Status |
 |---|---|---|
-| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Works locally: submit (batch), review, ZIP download, publish/schedule through Buffer, pricing/checkout/billing with payments switched off |
+| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Works locally: submit (batch), review, ZIP download, publish/schedule through Buffer, content calendar, pricing/checkout/billing with payments switched off |
 | **MCP server** | Use ClipperAi from AI assistants, e.g. *"take my latest podcast and make 15 clips"*. | Planned (Phase 8) |
-| **Telegram bot** | Send a video link to a bot and get clips and post copy back. Linked to your website account. | Planned |
 
-Every channel is a thin client over the same backend. Sign-in, subscription checks and usage limits are enforced once,
-in the backend, so the rules are identical everywhere. Today ClipperAi is used through the website (locally), its
-REST API and a command-line tool.
+Both are thin clients over the same backend. Sign-in, subscription checks and usage limits are enforced once, in the
+backend, so the rules are identical in both. The backend's REST API is what the website runs on; it isn't offered as a
+separate way to use ClipperAi.
 
 ---
 
@@ -101,18 +100,14 @@ flowchart TB
     subgraph Channels
         W[Website]
         M[MCP server]
-        T[Telegram bot]
-        CLI[CLI]
     end
     W -->|server-side proxy| API
-    M -. planned .-> API
-    T -. planned .-> API
+    M -. planned .-> S
     API[REST API<br/>api.py] --> S[Services<br/>jobs.py · billing.py · publishing.py]
     S --> PG[(Postgres<br/>projects · clips · transcripts · subscriptions · publications)]
     S --> BUF[Buffer<br/>posts to social networks]
     WK[Worker<br/>jobs.py] --> PG
     WK --> ENG[Engine<br/>clipper.py]
-    CLI --> ENG
     ENG --> GQ[Groq<br/>transcription]
     ENG --> DS[DeepSeek<br/>clip selection + copy]
     ENG --> FF[FFmpeg · OpenCV<br/>rendering]
@@ -126,8 +121,8 @@ flowchart TB
   does the processing; clients check the status.
 - **Business logic lives in the services**: `jobs.py` (projects, review, content package), `billing.py` (plans and
   usage limits) and `publishing.py` (sending approved clips to Buffer). The API, the worker and the future MCP server
-  and Telegram bot all call the same functions, so limits are identical everywhere. The website never talks to the backend directly from the browser: its own server forwards
-  `/api/*` requests and adds the key.
+  all call the same functions, so limits are identical everywhere. The website never talks to the backend directly
+  from the browser: its own server forwards `/api/*` requests and adds the key.
 - **Providers are swappable by configuration.** Groq and DeepSeek are both reached through the OpenAI-compatible SDK;
   R2 is reached through the standard S3 API, so any S3-compatible store works.
 
@@ -144,7 +139,7 @@ ClipperAi/
 ├── .claude/                instructions and build log for AI-assisted development
 └── apps/
     ├── backend/            Python backend: engine, API, worker, billing
-    │   ├── clipper.py      the engine + command-line tool
+    │   ├── clipper.py      the engine (run by the worker)
     │   ├── jobs.py         project services + background worker
     │   ├── billing.py      plans, the subscription, monthly usage limits
     │   ├── publishing.py   publish and schedule approved clips through Buffer
@@ -162,8 +157,8 @@ ClipperAi/
     │   ├── requirements.txt
     │   └── .env.example    configuration template
     ├── website/            Next.js website (Phase 5)
-    │   ├── app/            pages: / (new project), /dashboard, /projects/[id], /pricing, /checkout, /settings/billing,
-    │   │                   /settings/integrations
+    │   ├── app/            pages: / (new project), /dashboard, /projects/[id], /projects/[id]/calendar, /pricing,
+    │   │                   /checkout, /settings/billing, /settings/integrations
     │   ├── app/api/        server-side proxy that adds the backend key (the browser never sees it)
     │   ├── check.mjs       proxy checks against a running site
     │   ├── walkthrough.mjs clicks through every flow in headless Edge
@@ -171,9 +166,8 @@ ClipperAi/
     └── mcp/                MCP server (Phase 8; may live in the backend instead)
 ```
 
-Created locally while running, and never committed: `.env`, `.venv/`, `work/` (CLI download and transcript cache),
-`out/` (CLI output), `tmp/` (worker scratch space), `pgdata/` (local development database), and in the website
-`.env.local`, `node_modules/`, `.next/`.
+Created locally while running, and never committed: `.env`, `.venv/`, `tmp/` (worker scratch space), `pgdata/` (local
+development database), and in the website `.env.local`, `node_modules/`, `.next/`.
 
 ---
 
@@ -240,8 +234,8 @@ All settings live in `apps/backend/.env` (copy of [`.env.example`](apps/backend/
 
 | Variable | Needed by | Description |
 |---|---|---|
-| `GROQ_API_KEY` | CLI, worker | Groq key for transcription. |
-| `DEEPSEEK_API_KEY` | CLI, worker | DeepSeek key for clip selection and copy. |
+| `GROQ_API_KEY` | worker | Groq key for transcription. |
+| `DEEPSEEK_API_KEY` | worker | DeepSeek key for clip selection and copy. |
 | `API_KEY` | API | Shared secret every API request must send as `Authorization: Bearer <API_KEY>`. Use a long random string, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Replaced by per-user accounts later. |
 | `DATABASE_URL` | API, worker | Postgres connection string. **Leave blank locally**: a development Postgres starts automatically in `apps/backend/pgdata` (requires `pgserver`) and keeps running between sessions. Set it in production. |
 | `WORKER_CONCURRENCY` | worker | How many projects one worker processes at once. Default `1`. Each running project uses one FFmpeg process, so size this to the machine's CPU and memory. |
@@ -252,8 +246,6 @@ All settings live in `apps/backend/.env` (copy of [`.env.example`](apps/backend/
 | `S3_PUBLIC_BUCKET` | API | Publishing only: the public bucket that holds copies of clips being posted. |
 | `S3_PUBLIC_URL` | API | Publishing only: that bucket's public address, e.g. `https://pub-<id>.r2.dev` or `https://media.example.com`. |
 | `BUFFER_API_KEY` | API | Buffer API key for publishing (Buffer → Settings → API). Your social accounts are connected inside Buffer; ClipperAi posts to them through this key. Optional: without it everything else works and the Publishing page says Buffer isn't connected. |
-
-The CLI only needs the Groq and DeepSeek keys; it doesn't use the database or R2.
 
 The website reads `apps/website/.env.local` (copy of [`.env.example`](apps/website/.env.example)), used only by its
 server, never sent to the browser:
@@ -268,23 +260,6 @@ server, never sent to the browser:
 ## Running the backend
 
 All commands run from `apps/backend` with the virtual environment active.
-
-### Command-line tool (quickest way to try it)
-
-```bash
-python clipper.py "https://youtu.be/VIDEO_ID"
-python clipper.py podcast.mp4 -n 5 --min 20 --max 45
-```
-
-| Option | Default | Meaning |
-|---|---|---|
-| `source` | — | A video link or a local video file. |
-| `-n` | about 1 per 6 minutes of video (3–30) | Number of clips. |
-| `--min`, `--max` | `30`, `60` | Target clip length in seconds. |
-| `-o` | `out/<source id>/` | Output folder. |
-
-Output goes to `out/<source id>/` (see [What you get back](#what-you-get-back)). Downloads and transcripts are cached
-in `work/`, so re-running the same video skips straight to clip selection.
 
 ### Local development without Cloudflare
 
@@ -349,7 +324,8 @@ the signed link.
 
 ## API reference
 
-Every request needs `Authorization: Bearer <API_KEY>`. Bodies and responses are JSON. The examples use a shell
+This is the backend the website runs on (for development and the website itself; people use ClipperAi through the
+website or MCP). Every request needs `Authorization: Bearer <API_KEY>`. Bodies and responses are JSON. The examples use a shell
 variable: `export API_KEY=...`.
 
 | Method | Path | What it does | Success |
@@ -367,6 +343,8 @@ variable: `export API_KEY=...`.
 | `POST` | `/api/billing/cancel` | End the current plan | `200` |
 | `GET` | `/api/publishing/channels` | The social accounts connected in Buffer, and whether each can take clips | `200` |
 | `POST` | `/api/projects/{id}/clips/{idx}/publish` | Post an approved clip to Buffer channels, now or at a time | `201` |
+| `POST` | `/api/projects/{id}/calendar/plan` | Preview a content calendar: which approved clip goes out when | `200` |
+| `POST` | `/api/projects/{id}/calendar` | Schedule that calendar on Buffer channels | `201` |
 | `GET` | `/api/projects/{id}/publications` | The project's posts and their current state | `200` |
 | `DELETE` | `/api/publications/{id}` | Unschedule a post, or clear a failed one | `204` |
 
@@ -452,6 +430,7 @@ edited because it's burned into the video. The response is the updated clip, wit
 videos/clip01.mp4 ...     captions/clip01.ass ...     thumbnails/clip01.jpg ...
 metadata/clips.csv        one row per clip: title, hook, description, hashtags, a column per platform, timing, score, review
 metadata/clips.json       the same, with posts as an object
+calendar.csv              once anything is scheduled or posted: one row per post (time in UTC, clip, network, status, link)
 ```
 
 The metadata includes your edits. The files are read straight from storage, so the package is always current and takes
@@ -507,6 +486,38 @@ curl -X POST http://127.0.0.1:8000/api/projects/<id>/clips/1/publish \
   is unscheduled or has failed. If Buffer refuses one channel (say, its queue is full) the others still go out, and the
   refused one is recorded with Buffer's reason.
 
+### Content calendar
+
+Instead of publishing clips one by one, spread every approved clip over posting days and times ("Schedule all" on the
+website):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/projects/<id>/calendar/plan \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"channels": ["<channel id>"], "days": [1, 3, 5], "times": ["09:00", "18:00"], "start": "2026-09-21",
+       "timezone": "Europe/London"}'
+# -> {"posts": [{"clip_idx": 1, "title": "...", "due_at": "2026-09-21T08:00:00Z"}, ...], "left": []}
+```
+
+| Field | Rules |
+|---|---|
+| `channels` | 1–20 Buffer channel ids that can take clips. Every clip goes to all of them. |
+| `days` | Posting weekdays, `1` = Monday to `7` = Sunday. |
+| `times` | 1–6 posting times on those days (`HH:MM`), in `timezone`. |
+| `start` | First day posts can go out. |
+| `timezone` | An IANA time zone name (the website sends the browser's). Daylight saving is followed. |
+
+- **Which clips:** approved clips that aren't scheduled or posted yet, in clip order, one per posting time.
+- **Which times:** from `start`, at least 30 minutes from now, up to 30 days ahead. Times one of the chosen channels
+  already has a post at (from any project) are skipped, so a second calendar continues after the first. Clips that
+  don't fit are listed in `left`.
+- **Scheduling:** `POST /api/projects/{id}/calendar` with the same body creates the same plan and answers at once with
+  one post per clip and channel, `status: "queued"`. The worker (`python jobs.py`) hands queued posts to Buffer one by
+  one, usually within seconds, and they become `scheduled` like any other post. If Buffer's request limit is used up or
+  Buffer is down, the worker waits a minute and tries again; a post that still isn't in Buffer by its time is marked
+  `error`. If Buffer received a post but never answered, it is marked `error` rather than sent twice: check Buffer.
+  Queued posts can be unscheduled like scheduled ones.
+
 ---
 
 ## What you get back
@@ -560,8 +571,6 @@ A completed project (abbreviated):
 
 Download links are valid for **24 hours**; fetch the project again for fresh ones. After `files_expire_at` (30 days)
 the files are gone and no links are returned.
-
-The CLI writes the same things to disk: `clip01.mp4`, `clip01.ass`, `clip01.jpg`, … and `clips.json`.
 
 ---
 
@@ -702,9 +711,8 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | 4 | Storage: R2, direct uploads, signed links, automatic cleanup | ✅ Done: tested against a local S3 and checked live on R2 |
 | 5 | Website: product UI, subscriptions and payments, usage | Built locally: batch submit, progress, review, ZIP download, pricing/checkout/billing (payments switched off) |
 | 6 | Publishing through Buffer | ✅ Done: post now, scheduled and unscheduled posts tested through the website against real Buffer, YouTube and R2 |
-| 7 | Content calendar and scheduling | Next |
-| 8 | MCP server for AI assistants | Planned |
-| — | Telegram bot | Planned |
+| 7 | Content calendar and scheduling | ✅ Done: plan, preview, Schedule all through the worker, calendar list, `calendar.csv`; against real Buffer: one post scheduled and unscheduled through the website, and a 30-post batch (Buffer's request limit not yet tried for real) |
+| 8 | MCP server for AI assistants | Next |
 | 9 | Accounts, plans, usage limits, cost tracking | Partly: plans and monthly limits for one workspace; accounts, real payments and cost tracking planned |
 | 10 | Production hardening and deployment (Railway) | Planned |
 
@@ -715,6 +723,8 @@ Known limitations today:
 - Payments are switched off: plans show prices but charge nothing. No payment provider is connected yet.
 - Publishing uses one Buffer account (the workspace's key), every YouTube upload gets the "People & Blogs" category,
   and the public bucket uses Cloudflare's rate-limited `r2.dev` address until a custom domain is connected.
+- Buffer plans cap how many posts can be scheduled at once (10 on the account used for testing). Calendar posts past the
+  cap come back as failed with Buffer's reason ("Scheduled posts limit reached"); the calendar doesn't warn beforehand.
 - Editing a clip's copy doesn't re-render the video, so the burned-in hook can't be changed yet.
 - Framing follows the largest face, which isn't always the person speaking in two-person shots; handheld footage can
   produce visible crop jumps.

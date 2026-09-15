@@ -471,5 +471,144 @@ assert jobs.delete_project(pid)["id"] == pid, "only sent posts left"
 with db.connect() as c:
     assert c.execute("select count(*) from publications").fetchone()["count"] == 0
 
+# content calendar: approved clips spread over posting days and times, queued, then handed to Buffer by the worker
+from datetime import date, time  # noqa: E402
+
+with db.connect() as c:
+    pid = c.execute("insert into projects (source, options, status, finished_at) values"
+                    " ('https://example.com/v', '{}', 'completed', now()) returning id").fetchone()["id"]
+    for i in (1, 2, 3, 4):
+        c.execute("""insert into clips (project_id, idx, start_s, end_s, score, reason, hook, title, description,
+                                        hashtags, posts) values (%s, %s, 0, 30, 90, 'r', 'h', %s, 'd', '[]', %s)""",
+                  (pid, i, f"Clip {i}", Jsonb({k: f"{k} post {i}" for k in clipper.Posts.model_fields})))
+        for ext in ("mp4", "ass", "jpg"):
+            storage.client().put_object(Bucket="clips", Key=f"projects/{pid}/clip{i:02}.{ext}", Body=f"clip {i}".encode())
+tokyo = timezone(timedelta(hours=9))  # no daylight saving, so the expected times below are plain arithmetic
+
+
+def calendar(**changes):
+    return publishing.Calendar(**{"channels": ["channel-tiktok", "channel-youtube"], "days": [1, 3, 5],
+                                  "times": ["18:30", "09:00"], "start": date.today(), "timezone": "Asia/Tokyo"} | changes)
+
+
+def post_row(publication):
+    with db.connect() as c:
+        return c.execute("select * from publications where id = %s", (publication["id"],)).fetchone()
+
+
+for bad in ({"timezone": "Mars/Olympus"}, {"timezone": "../../etc/passwd"}, {"days": [0]}, {"days": []},
+            {"times": []}, {"channels": []}, {"times": ["25:00"]}):
+    rejects(lambda: calendar(**bad), f"accepted calendar {bad}")
+assert publishing.plan(uuid4(), calendar()) is None and publishing.schedule(uuid4(), calendar()) is None
+cannot(lambda: publishing.plan(pid, calendar()), "Approve the clips you want to schedule first")
+for i in (1, 2, 3):
+    jobs.update_clip(pid, i, jobs.ClipEdit(review="approved"))
+
+# the plan: clips in order, one per posting time, the earliest times first (checked against every half hour)
+planned = publishing.plan(pid, calendar())
+earliest = datetime.now(timezone.utc) + publishing.EARLIEST
+half_hours = (earliest.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=30 * k) for k in range(1, 1500))
+expected = [t for t in half_hours if t >= earliest and t.astimezone(tokyo).isoweekday() in (1, 3, 5)
+            and t.astimezone(tokyo).time() in (time(9), time(18, 30))][:4]
+assert [(p["clip_idx"], p["due_at"]) for p in planned["posts"]] == list(zip([1, 2, 3], expected)), planned
+assert planned["left"] == [] and planned["posts"][0]["title"] == "Clip 1"
+later_start = date.today() + timedelta(days=10)
+assert all(p["due_at"].astimezone(tokyo).date() >= later_start
+           for p in publishing.plan(pid, calendar(start=later_start))["posts"])
+edge = (datetime.now(timezone.utc) + timedelta(days=29)).date()  # 12:00 UTC on this day fits; the next day's may not
+late = publishing.plan(pid, calendar(start=edge, days=list(range(1, 8)), times=["12:00"], timezone="UTC"))
+assert 1 <= len(late["posts"]) <= 2 and [p["clip_idx"] for p in late["posts"]] + late["left"] == [1, 2, 3], late
+assert all(p["due_at"] <= datetime.now(timezone.utc) + publishing.AHEAD for p in late["posts"])
+cannot(lambda: publishing.plan(pid, calendar(start=date.today() + timedelta(days=31))), "within the next 30 days", 422)
+
+# scheduling queues a post per clip and channel without asking Buffer anything but the channel list
+cannot(lambda: publishing.schedule(pid, calendar(channels=["channel-tiktok", "channel-linkedin"])), "can't be used", 422)
+calls = buffer.calls
+queued = publishing.schedule(pid, calendar())
+assert buffer.calls == calls + 2, "organizations + channels only"
+assert sorted((p["clip_idx"], p["service"], p["status"], p["due_at"]) for p in queued) == sorted(
+    (p["clip_idx"], s, "queued", p["due_at"]) for p in planned["posts"] for s in ("tiktok", "youtube")), queued
+assert not any(p["buffer_post_id"] for p in queued)
+cannot(lambda: publishing.schedule(pid, calendar()), "Every approved clip is already scheduled or posted")
+cannot(lambda: publishing.publish(pid, 1, publishing.Publish(channels=["channel-tiktok"])), "already scheduled")
+with db.connect() as c:
+    c.execute("update publications set checked_at = now() - interval '2 minutes'")
+calls = buffer.calls
+assert len(publishing.publications(pid)["publications"]) == 6 and buffer.calls == calls, "queued posts aren't in Buffer"
+assert jobs.delete_project(pid) is None, "queued posts still have to go out"
+unqueued = next(p for p in queued if p["clip_idx"] == 3 and p["service"] == "youtube")
+assert publishing.remove(unqueued["id"])["id"] == unqueued["id"] and buffer.calls == calls and post_row(unqueued) is None
+
+# the worker: Buffer's limit puts the post back in the queue; then each queued post is created with its time
+buffer.fail = "rate_limited"
+cannot(publishing.send_queued, "Try again in 13 minutes", 502)
+with db.connect() as c:
+    assert c.execute("select count(*) from publications where status = 'queued'").fetchone()["count"] == 5
+buffer.fail = None
+while publishing.send_queued():
+    pass
+assert publishing.send_queued() is False
+for p in queued:
+    if p["id"] == unqueued["id"]:
+        continue
+    row = post_row(p)
+    sent_input = buffer.inputs[row["buffer_post_id"]]
+    assert row["status"] == "scheduled" and row["due_at"] == p["due_at"], row
+    assert sent_input["mode"] == "customScheduled" and sent_input["dueAt"] == p["due_at"].isoformat()
+    assert sent_input["text"] == f"{row['service']} post {row['clip_idx']}" and public_copy(row) == f"clip {row['clip_idx']}".encode()
+
+# the worker: Buffer refusing, Buffer never answering (the post may exist: not sent again), a time already gone;
+# a clip approved later goes after the posts TikTok already has, not on top of them (on X it could take the first time)
+jobs.update_clip(pid, 4, jobs.ClipEdit(review="approved"))
+assert publishing.plan(pid, calendar(channels=["channel-twitter"]))["posts"][0]["due_at"] == expected[0]
+
+
+def queue_clip4():
+    return publishing.schedule(pid, calendar(channels=["channel-tiktok"]))[0]
+
+
+buffer.fail = "You've reached the limit of scheduled posts for this channel"
+refused = queue_clip4()
+assert refused["due_at"] == expected[3], (refused["due_at"], expected)
+assert publishing.send_queued() and "limit of scheduled posts" in post_row(refused)["error"] and public_copy(refused) is None
+buffer.fail = None
+silent = queue_clip4()
+real_call = publishing.call
+
+
+def no_answer(*args, **kwargs):
+    raise publishing.PublishError("Couldn't reach Buffer. Try again in a minute.", 502) from TimeoutError()
+
+
+publishing.call = no_answer
+assert publishing.send_queued() and "didn't answer in time" in post_row(silent)["error"] and public_copy(silent) is None
+publishing.call = real_call
+missed = queue_clip4()
+with db.connect() as c:
+    c.execute("update publications set due_at = now() + interval '30 seconds' where id = %s", (missed["id"],))
+calls = buffer.calls
+assert publishing.send_queued() and post_row(missed)["status"] == "error" and buffer.calls == calls
+assert "before its time" in post_row(missed)["error"]
+assert publishing.send_queued() is False
+
+# the content package carries the calendar: every post, in time order
+package = zipfile.ZipFile(io.BytesIO(b"".join(jobs.content_package(pid))))
+table = list(csv.DictReader(io.StringIO(package.read("calendar.csv").decode("utf-8-sig"))))
+assert list(table[0]) == ["due_at", "clip_idx", "title", "network", "channel_name", "status", "external_link", "error"]
+assert len(table) == 8 and {r["network"] for r in table} == {"tiktok", "youtube"}, table
+scheduled_rows = [r for r in table if r["status"] == "scheduled"]
+assert [r["due_at"] for r in scheduled_rows] == sorted(r["due_at"] for r in scheduled_rows) and scheduled_rows[0]["title"] == "Clip 1"
+
+# expired videos can't be scheduled; unscheduling everything leaves no public copies; then the project can go
+with db.connect() as c:
+    c.execute("update projects set finished_at = now() - interval '31 days' where id = %s", (pid,))
+cannot(lambda: publishing.plan(pid, calendar()), "expired")
+in_buffer = {row["buffer_post_id"] for row in publishing.publications(pid)["publications"]} - {None}
+for row in publishing.publications(pid)["publications"]:
+    publishing.remove(row["id"])
+assert len(in_buffer) == 5 and not in_buffer & buffer.posts.keys()
+assert storage.client().list_objects_v2(Bucket="clips-public").get("KeyCount") == 0
+assert jobs.delete_project(pid)["id"] == pid
+
 s3.stop()
 print("ok")

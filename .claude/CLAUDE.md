@@ -6,18 +6,18 @@ copy → content calendar → automated publishing (Buffer)**, also operable by 
 "I give it a video and it gives me a month of content." Full spec: `masterprompt.md` (source of truth for scope and
 phase order). Dependency/license/cost decisions: `DECISIONS.md` (update it whenever a dependency changes).
 
-### Channels (additions to masterprompt.md, decided 2026-09-14)
-One account, one subscription, one usage balance — reachable through three channels:
+### Channels (additions to masterprompt.md, decided 2026-09-14, narrowed 2026-09-15)
+One account, one subscription, one usage balance. **The only ways to use the product are the website and MCP**
+(user, 2026-09-15: the Telegram bot and the command-line tool were scrapped; don't build them or other channels):
 - **Website** (`apps/website`, Next.js): the **only place to pay** (subscriptions) and a full way to use the product
   (submit videos, review clips, schedule, see usage and billing).
 - **MCP server**: use the product from AI assistants. Lives in `apps/mcp` if it needs its own deployable; otherwise
   mounted inside the backend (FastAPI + official `mcp` SDK). Decide in Phase 8 — default to the backend unless there is
   a concrete reason to split.
-- **Telegram bot** (planned, not in the original spec): use the product from Telegram (send a link/video, get clips
-  back). Telegram users link to their website account; no payments inside the bot.
 
-Channels are thin clients. **Auth, subscription checks and usage limits are enforced once, in the backend services**
-(`jobs.py`, `billing.py`), never re-implemented per channel.
+The backend REST API is the website's backend, not a separate product channel. Channels are thin clients. **Auth,
+subscription checks and usage limits are enforced once, in the backend services** (`jobs.py`, `billing.py`,
+`publishing.py`), never re-implemented per channel.
 
 Build progress, what's left and lessons learned: @memory.md — **read it before starting work and update it after
 every milestone** (what was done, how it was verified, what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
@@ -41,9 +41,8 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
 - **Never trust model output**: schema-validate (pydantic), retry, reject. Timestamps come from the transcript/pass 1,
   never invented. **Spoken caption text comes only from the transcript.**
 - **Business logic lives in backend service modules** (`jobs.py` projects, `billing.py` plans/limits, `publishing.py`
-  Buffer; shared by REST
-  API, MCP server, Telegram bot, worker). Route and bot/tool handlers stay thin and call the same services — no
-  duplicate logic per channel. The website only talks to the backend through its `/api/*` proxy.
+  Buffer; shared by the REST API, MCP server and worker). Route and tool handlers stay thin and call the same
+  services — no duplicate logic per channel. The website only talks to the backend through its `/api/*` proxy.
 - **Long work never blocks a request**: create a project → return id → worker processes → client polls status.
 - **Cost rules**: existing/cached transcript before paid STT (transcripts cached by source key in Postgres); cheapest
   acceptable model (deepseek-flash) before stronger (deepseek-v4-pro); cache results; temporary storage only; delete
@@ -53,7 +52,8 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
   and `projects/` (30 days). Don't store users' source videos beyond processing. Only exception: a clip being
   published is copied to the public bucket (`S3_PUBLIC_BUCKET`, Buffer can't read signed links) and deleted once posted.
 - **Publishing through a provider (Buffer)**, users connect their own accounts via OAuth/their key; never ask for
-  social passwords. Don't build per-network integrations in the MVP.
+  social passwords. Don't build per-network integrations in the MVP. Single posts are sent in the request; content
+  calendar posts are queued (`publications.status = 'queued'`) and handed to Buffer by the worker.
 - **UI (Phase 5)**: Next.js + TypeScript + Tailwind, extremely clean and minimal, no gradients/card clutter/generic
   AI-SaaS look; human-readable progress messages ("Finding your strongest moments...").
 
@@ -67,6 +67,17 @@ every milestone** (what was done, how it was verified, what's pending, new gotch
 - **Licensing**: no GPL/AGPL code in the product without explicit evaluation (e.g. Ultralytics YOLO and Postiz are
   AGPL — avoid). Prefer MIT/Apache/BSD. Every dependency goes in `DECISIONS.md`.
 
+## Testing against real services (Buffer, R2, social accounts)
+- **Never post publicly to the user's accounts without their explicit go-ahead.** Default: schedule days ahead, verify
+  in Buffer, unschedule, then check Buffer has 0 waiting posts and the public bucket is empty. Label test content
+  clearly ("ClipperAi ... test").
+- Buffer limits on this account: **100 API requests per 15 minutes** and **10 scheduled posts** (the plan's cap; more
+  are refused with "Scheduled posts limit reached"). Don't loop against the real API.
+- Claude Code's auto-mode permission check can block commands that create or change real posts (and then related
+  read-only commands too). Don't work around it: stop, say exactly what's left in a half-done state, and give the user
+  the command to run themselves (they can type `! <command>`) or ask them to add an allow rule.
+- `dev.py` always uses fake S3; for real R2 + Buffer run `uvicorn api:app` and `python jobs.py` separately.
+
 ## Git
 - Commit or push only when the user asks. End commit messages with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
 - **Work directly on `main`; don't create branches** (user instruction, 2026-09-14).
@@ -78,10 +89,10 @@ export PATH="$PATH:/c/Users/USER/AppData/Local/Microsoft/WinGet/Links"   # ffmpe
 .venv/Scripts/python test_clipper.py        # engine checks (needs ffmpeg)
 .venv/Scripts/python test_jobs.py           # queue + storage + billing + publishing vs throwaway Postgres (pgserver),
                                             # S3 (moto) and Buffer (fake_buffer.py)
-.venv/Scripts/python clipper.py <url> -n 3  # CLI run -> out/<source key>/
-.venv/Scripts/python dev.py                 # API :8000 + worker + fake in-memory S3 (moto :9000), no Cloudflare needed
+.venv/Scripts/python dev.py                 # API :8000 + worker (projects + calendar posts) + fake in-memory S3 (moto
+                                            # :9000), no Cloudflare needed
 .venv/Scripts/python dev.py --fake-buffer   # same, publishing goes to an in-memory Buffer with demo channels
-.venv/Scripts/python jobs.py                # worker
+.venv/Scripts/python jobs.py                # worker: processes projects and hands queued calendar posts to Buffer
 .venv/Scripts/python -m uvicorn api:app --port 8000
 .venv/Scripts/python storage.py setup       # once per bucket: lifecycle + CORS
 ```
@@ -91,8 +102,8 @@ Website (run from `apps/website`; backend must be running, `.env.local` has `BAC
 NODE_EXTRA_CA_CERTS=C:/Users/USER/.certs/ca-bundle-with-windows-roots.pem npm install   # Avast breaks npm TLS here
 npm run dev                  # http://127.0.0.1:3000 (npm run build && npm run start for the production build)
 node check.mjs               # proxy checks against the running site (no paid calls)
-# browser walkthrough of every flow (headless Edge via DevTools protocol; backend must be `dev.py --fake-buffer`;
-# changes the local dev DB):
+# browser walkthrough of every flow incl. publishing + content calendar (headless Edge via DevTools protocol; backend
+# must be `dev.py --fake-buffer`; changes the local dev DB, clean it afterwards):
 cd ../backend && .venv/Scripts/python dev_fixture.py   # prints <project id> <media folder>
 cd ../website && node walkthrough.mjs <project id> <media folder>
 ```
