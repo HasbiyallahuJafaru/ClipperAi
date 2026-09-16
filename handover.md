@@ -77,9 +77,14 @@ GitHub: https://github.com/HasbiyallahuJafaru/ClipperAi (**public**), branch `ma
 ## Open items waiting on the user
 
 1. **Register the YT-Clipper app in Buffer → Settings → API** (redirect `https://ytclipper.xyz/oauth/return`) and
-   set `BUFFER_CLIENT_ID`/`BUFFER_CLIENT_SECRET` on Railway — then deploy api+worker and connect your own account
+   set `BUFFER_CLIENT_ID`/`BUFFER_CLIENT_SECRET` on Railway — then deploy api + worker and connect your own account
    as the first per-user test. (Research notes: socialmediascheduler repo = no license, read-only reference;
    Open-Dispatch = MIT, adapter reference for direct APIs later.)
+2. **The workspace `BUFFER_API_KEY` on Railway is DEAD** (2026-09-16: Buffer answers 401 to it; it worked 09-15).
+   Create a fresh key in Buffer → Settings → API and update Railway + `.env` — until then, publishing only works for
+   users who connect their own Buffer (OAuth) once the client is registered. The Buffer CLI
+   (`npm i -g @bufferapp/cli`, v1.2.0 installed on this PC; `BUFFER_API_KEY=... buffer account`) is a handy way to
+   verify a key and inspect channels — but it's API-key auth for one account, it can't mint OAuth clients.
 2. **Test a real purchase end to end** (₦ amount at live rate, Paystack page, webhook, plan active 30 days,
    renewal stacking). Payments charge real money now.
 3. **Vercel → website → Settings → Deployment Protection:** "Only Preview Deployments", otherwise nobody can open
