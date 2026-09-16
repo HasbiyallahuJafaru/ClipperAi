@@ -27,6 +27,7 @@ import billing
 import clipper
 import db
 import jobs
+import oauth
 import payments
 import publishing
 
@@ -110,6 +111,11 @@ def cannot_publish(_, error: publishing.PublishError):
     return JSONResponse({"detail": str(error)}, status_code=error.status)
 
 
+@app.exception_handler(oauth.ConnectError)
+def cannot_connect(_, error: oauth.ConnectError):
+    return JSONResponse({"detail": str(error)}, status_code=error.status)
+
+
 @app.get("/health")
 def health():  # Railway's healthcheck: no sign-in, no data; answers once startup (env check + migrations) is done
     return {"ok": True}
@@ -182,6 +188,32 @@ def download_package(owner: Owner, project_id: UUID):
 @app.get("/api/publishing/channels")
 def publishing_channels(owner: Owner):
     return publishing.channels(owner)
+
+
+@app.get("/api/publishing/connection")
+def publishing_connection(owner: Owner):
+    """The owner's own connected Buffer account, or None (they're on the workspace key or nothing)."""
+    return oauth.connection(owner)
+
+
+@app.post("/api/publishing/connect/buffer", status_code=201)
+def connect_buffer(owner: Owner):
+    """Where to send the browser to authorize YT-Clipper on the owner's Buffer account."""
+    return {"authorization_url": oauth.connect_url(owner, "buffer")}
+
+
+@app.post("/api/publishing/callback", status_code=201)
+def connect_callback(owner: Owner, request: oauth.Callback):
+    """The website's /oauth/return page hands over the code and state Buffer left in its URL. The state must be one
+    this very owner started, so accounts can't be linked to someone else."""
+    if owner != oauth.state_owner(request.state):
+        raise HTTPException(403, "This connection was started by another account. Start again on the Integrations page.")
+    return oauth.callback(request.state, request.code)
+
+
+@app.delete("/api/publishing/connection", status_code=204)
+def disconnect_buffer(owner: Owner):
+    oauth.disconnect(owner)
 
 
 @app.post("/api/projects/{project_id}/clips/{idx}/publish", status_code=201)

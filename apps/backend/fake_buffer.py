@@ -5,6 +5,7 @@ links can't be read), keeps posts in memory, and "sends" a post once its time ha
 Set `fail` to act out trouble: "unauthorized", "rate_limited", "down", or any other text = createPost refuses with it."""
 import json
 import threading
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timezone
@@ -37,13 +38,15 @@ class FakeBuffer:
                          channel("pinterest", "clipperdemo"),
                          channel("instagram", "clipper.personal", "profile", id="channel-instagram-personal")]
         self.posts, self.inputs, self.fail, self.calls = {}, {}, None, 0
+        self.access_tokens, self.refresh_tokens, self.issued = set(), set(), 0  # the auth server's state
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
                 fake.calls += 1
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                if self.headers.get("Authorization") != f"Bearer {KEY}" or fake.fail == "unauthorized":
+                bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+                if bearer != KEY and bearer not in fake.access_tokens or fake.fail == "unauthorized":
                     return self.reply(401, {"errors": [{"message": "Access token is not valid",
                                                         "extensions": {"code": "UNAUTHENTICATED"}}]})
                 if fake.fail == "rate_limited":
@@ -67,7 +70,43 @@ class FakeBuffer:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_port}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+        class AuthHandler(BaseHTTPRequestHandler):
+            """auth.buffer.com's token endpoint for OAuth tests: an authorization code becomes a token pair, and a
+            refresh token works exactly once (rotated, like the real one)."""
+            def do_POST(self):
+                form = dict(urllib.parse.parse_qsl(self.rfile.read(int(self.headers["Content-Length"])).decode()))
+                if form.get("client_secret") != KEY:
+                    return self.reply(401, {"error": "invalid_client"})
+                if form["grant_type"] == "authorization_code":
+                    return self.reply(200, fake.issue())
+                if form["grant_type"] == "refresh_token" and form["refresh_token"] in fake.refresh_tokens:
+                    fake.refresh_tokens.discard(form["refresh_token"])  # single use: a replay is refused
+                    return self.reply(200, fake.issue())
+                self.reply(400, {"error": "invalid_grant"})
+
+            def reply(self, status, body):
+                data = json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        self.auth_server = ThreadingHTTPServer(("127.0.0.1", 0), AuthHandler)
+        self.auth_url = f"http://127.0.0.1:{self.auth_server.server_port}"
+        for server in (self.server, self.auth_server):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def issue(self) -> dict:
+        self.issued += 1
+        access, refresh = f"at-{self.issued}", f"rt-{self.issued}"
+        self.access_tokens.add(access)
+        self.refresh_tokens.add(refresh)
+        return {"access_token": access, "refresh_token": refresh, "expires_in": 3600, "token_type": "Bearer"}
 
     def answer(self, query: str, variables: dict) -> dict:
         if "createPost" in query:

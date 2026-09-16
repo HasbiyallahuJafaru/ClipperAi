@@ -413,12 +413,12 @@ def public_copy(publication):
 
 # the workspace's Buffer account posts to one person's socials: only the owners in BUFFER_OWNERS may use it
 os.environ["BUFFER_OWNERS"] = ME
-cannot(lambda: publishing.channels(OTHER), "isn't connected for your account")
+cannot(lambda: publishing.channels(OTHER), "Connect your Buffer account")
 assert publishing.publish(OTHER, pid, 1, publishing.Publish(channels=["channel-tiktok"])) is None, "not their clip"
 
-# connecting: no key, a wrong key (what an OAuth failure looks like with keys), then the right one
+# connecting: no key and no connection, then a wrong key (what an OAuth failure looks like with keys)
 os.environ.pop("BUFFER_API_KEY", None)
-cannot(lambda: publishing.channels(ME), "BUFFER_API_KEY")
+cannot(lambda: publishing.channels(ME), "Connect your Buffer account")
 os.environ["BUFFER_API_KEY"] = "wrong"
 cannot(lambda: publishing.channels(ME), "didn't accept the API key", 502)
 os.environ["BUFFER_API_KEY"] = fake_buffer.KEY
@@ -550,6 +550,56 @@ cannot(lambda: publish(2, ["channel-youtube"]), "expired")
 assert jobs.delete_project(ME, pid)["id"] == pid, "only sent posts left"
 with db.connect() as c:
     assert c.execute("select count(*) from publications").fetchone()["count"] == 0
+
+# per-user Buffer OAuth: a user connects their own account and posts through it without BUFFER_OWNERS
+import oauth  # noqa: E402
+import urllib.parse  # noqa: E402
+
+os.environ |= {"BUFFER_CLIENT_ID": "client-123", "BUFFER_CLIENT_SECRET": fake_buffer.KEY,
+               "BUFFER_REDIRECT_URL": "http://localhost:3000/oauth/return"}
+oauth.AUTH = buffer.auth_url
+
+started = oauth.connect_url(OTHER)
+assert "code_challenge=" in started and "state=" in started, "PKCE is on"
+state = urllib.parse.parse_qs(urllib.parse.urlparse(started).query)["state"][0]
+assert oauth.state_owner(state) == OTHER and oauth.state_owner(state + "x") is None
+assert oauth.state_owner(state) != ME, "the route refuses a connect attempt started by another account"
+# a fresh connect: the fake's token exchange needs no real browser, only the handshake to line up
+account = oauth.callback(state, "code-2")
+assert account["provider"] == "buffer"
+assert oauth.state_owner(state) is None and oauth.state_owner(f"{state}x") is None, "a state is single use"
+theirs = oauth.token_for(OTHER)
+assert theirs in buffer.access_tokens and theirs != os.environ.get("BUFFER_API_KEY")
+# their channels come from their own account, with no workspace key at all and BUFFER_OWNERS not listing them
+os.environ.pop("BUFFER_API_KEY", None)
+assert [c["id"] for c in publishing.channels(OTHER)] == [c["id"] for c in buffer.channels]
+with db.connect() as c:  # an expiring token is refreshed, and the single-use refresh token rotated
+    c.execute("update connected_accounts set expires_at = now() + interval '1 minute'")
+first = theirs
+assert oauth.token_for(OTHER) not in (first,), "refresh didn't rotate the access token"
+refreshed = oauth.token_for(OTHER)
+# a replayed refresh token (Buffer's rule) breaks the connection: the row goes, reconnecting is the only way
+stale = refreshed
+with db.connect() as c:
+    c.execute("update connected_accounts set expires_at = now() + interval '1 minute'")
+saved_request = oauth._token_request
+def replay(form):
+    return saved_request({**form, "refresh_token": "rt-1"})  # already used above
+oauth._token_request = replay
+try:
+    oauth.token_for(OTHER)
+    raise AssertionError("accepted a replayed refresh token")
+except oauth.ConnectError as e:
+    assert "Connect it again" in str(e) and e.status == 401
+oauth._token_request = saved_request
+assert oauth.connection(OTHER) is None, "a broken connection is removed, not kept"
+# disconnecting a live connection clears it for that owner only
+assert oauth.callback(*(lambda s: (s, "code-3"))(urllib.parse.parse_qs(
+    urllib.parse.urlparse(oauth.connect_url(OTHER)).query)["state"][0]))["provider"] == "buffer"
+oauth.disconnect(OTHER)
+assert oauth.connection(OTHER) is None and oauth.token_for(OTHER) is None
+os.environ.pop("BUFFER_CLIENT_ID", None)
+os.environ["BUFFER_API_KEY"] = fake_buffer.KEY
 
 # content calendar: approved clips spread over posting days and times, queued, then handed to Buffer by the worker
 from datetime import date, time  # noqa: E402

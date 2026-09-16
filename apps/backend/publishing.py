@@ -73,20 +73,24 @@ class Calendar(BaseModel):
         return name
 
 
-def call(query: str, **variables) -> dict:
-    """One GraphQL request to Buffer. Raises PublishError with a readable reason for anything but data."""
-    if not os.environ.get("BUFFER_API_KEY"):
-        raise PublishError("Buffer isn't connected yet. Create an API key in Buffer (Settings, then API) and set"
-                           " BUFFER_API_KEY in the backend's .env.")
+def call(query: str, token: str | None = None, **variables) -> dict:
+    """One GraphQL request to Buffer. `token` publishes through a user's own connected account (oauth.py); None uses
+    the workspace key (BUFFER_API_KEY), the fallback for owners listed in BUFFER_OWNERS. Raises PublishError with a
+    readable reason for anything but data."""
+    if not (token or os.environ.get("BUFFER_API_KEY")):
+        raise PublishError("Buffer isn't connected yet. Connect your Buffer account on the Integrations page.")
     request = urllib.request.Request(API, json.dumps({"query": query, "variables": variables}).encode(), {
-        "Content-Type": "application/json", "Authorization": f"Bearer {os.environ['BUFFER_API_KEY']}"})
+        "Content-Type": "application/json", "Authorization": f"Bearer {token or os.environ['BUFFER_API_KEY']}"})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             body = json.load(response)
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            raise PublishError("Buffer didn't accept the API key. It may have been deleted: create a new one in Buffer"
-                               " and update BUFFER_API_KEY.", 502) from e
+            if token is None:  # the workspace key was refused
+                raise PublishError("Buffer didn't accept the API key. It may have been deleted: create a new one in"
+                                   " Buffer and update BUFFER_API_KEY.", 502) from e
+            raise PublishError("Buffer disconnected your account. Connect it again on the Integrations page.",
+                               401) from e
         if e.code == 429:
             minutes = -(-int(e.headers.get("Retry-After") or 60) // 60)
             raise PublishError(f"Buffer's request limit is used up for now. Try again in {minutes} minute"
@@ -99,33 +103,36 @@ def call(query: str, **variables) -> dict:
     return body["data"]
 
 
-def allowed(owner: str):
-    """BUFFER_API_KEY posts to one person's social accounts, so only the owners listed in BUFFER_OWNERS (Clerk ids,
-    comma-separated; `*` = everyone, for the fake Buffer in dev.py) may publish through it."""
-    # ponytail: one Buffer account for the whole deployment; give each account its own publishing connection before
-    # anyone else signs up
+def allowed(owner: str) -> str | None:
+    """The Buffer token requests run with: the owner's own connected account (oauth.py), or None for the workspace
+    key, which only the owners listed in BUFFER_OWNERS (Clerk ids, comma-separated; `*` = everyone, for dev.py's fake)
+    may use. Raise with a readable reason when there is neither."""
+    import oauth  # here: oauth imports publishing for the identity check
+    if (token := oauth.token_for(owner)) is not None:
+        return token
     listed = os.environ.get("BUFFER_OWNERS", "")
-    if listed != "*" and owner not in listed.split(","):
-        raise PublishError("Publishing isn't connected for your account yet.")
+    if listed == "*" or owner in listed.split(","):
+        return None
+    raise PublishError("Connect your Buffer account on the Integrations page to publish.")
 
 
 def channels(owner: str) -> list[dict]:
-    """The social accounts connected in Buffer. `usable`: YT-Clipper can post clips there (a network we write copy
-    for, connected, not locked by Buffer's plan, and not a personal Instagram profile: Buffer only sends those a
-    reminder to post by hand)."""
-    allowed(owner)
+    """The social accounts connected in Buffer (the owner's own account when they've connected it, else the
+    workspace's). `usable`: YT-Clipper can post clips there (a network we write copy for, connected, not locked by
+    Buffer's plan, and not a personal Instagram profile: Buffer only sends those a reminder to post by hand)."""
+    token = allowed(owner)
     found = []
-    for organization in call("{ account { organizations { id } } }")["account"]["organizations"]:
+    for organization in call("{ account { organizations { id } } }", token=token)["account"]["organizations"]:
         found += call("""query($id: OrganizationId!) { channels(input: {organizationId: $id}) {
                              id service type name displayName isDisconnected isLocked } }""",
-                      id=organization["id"])["channels"]
+                      token=token, id=organization["id"])["channels"]
     return [c | {"usable": c["service"] in SERVICES and not c["isDisconnected"] and not c["isLocked"]
                  and not (c["service"] == "instagram" and c["type"] == "profile")} for c in found]
 
 
 def ready(owner: str, channel_ids: list[str]) -> list[dict]:
     """The chosen channels, once it's certain publishing is set up and every one of them can take clips."""
-    allowed(owner)
+    token = allowed(owner)
     if not (os.environ.get("S3_PUBLIC_BUCKET") and os.environ.get("S3_PUBLIC_URL")):
         raise PublishError("Publishing isn't set up yet: Buffer needs a public bucket for videos. Set S3_PUBLIC_BUCKET"
                            " and S3_PUBLIC_URL in the backend's .env.")
@@ -193,6 +200,7 @@ def publish(owner: str, project_id: UUID, idx: int, request: Publish) -> list[di
         raise PublishError("That time has already passed. Pick a time in the future.", 422)
     if request.due_at and request.due_at > schedule_until(project):
         raise PublishError(f"Posts can be scheduled up to {AHEAD.days} days ahead. Pick an earlier time.", 422)
+    token = allowed(owner)
     chosen = ready(owner, request.channels)
     with db.connect() as c:
         taken = [r["channel_name"] for r in c.execute("""
@@ -214,7 +222,7 @@ def publish(owner: str, project_id: UUID, idx: int, request: Publish) -> list[di
         # ponytail: if Buffer creates the post but the reply times out, the row says error and a retry posts twice
         video_url = storage.public_copy(f"projects/{project_id}/clip{idx:02}.mp4", video_name(row["id"]))
         try:
-            result = call(CREATE, input=post_input(clip, channel, video_url, request.due_at))["createPost"]
+            result = call(CREATE, token=token, input=post_input(clip, channel, video_url, request.due_at))["createPost"]
         except PublishError as e:  # key, limit or connection trouble: the remaining channels would fail the same way
             save(row["id"], error=str(e))
             raise
@@ -298,6 +306,13 @@ def send_queued() -> bool:
     if row["due_at"] < datetime.now(timezone.utc) + timedelta(minutes=1):
         save(row["id"], error="This post couldn't be handed to Buffer before its time. Schedule it again.")
         return True
+    with db.connect() as c:
+        owner = c.execute("select owner from projects where id = %s", (row["project_id"],)).fetchone()["owner"]
+    try:
+        token = allowed(owner)
+    except PublishError as e:  # e.g. the account was disconnected after scheduling: this post can't go out
+        save(row["id"], error=str(e))
+        return True
     # ponytail: sent even if the clip was un-approved after scheduling; check clip["review"] here if that happens
     with db.connect() as c:
         clip = c.execute("select * from clips where project_id = %s and idx = %s",
@@ -305,8 +320,8 @@ def send_queued() -> bool:
     try:
         video_url = storage.public_copy(f"projects/{row['project_id']}/clip{row['clip_idx']:02}.mp4",
                                         video_name(row["id"]))
-        result = call(CREATE, input=post_input(clip, {"id": row["channel_id"], "service": row["service"]}, video_url,
-                                               row["due_at"]))["createPost"]
+        result = call(CREATE, token=token, input=post_input(clip, {"id": row["channel_id"], "service": row["service"]},
+                                                            video_url, row["due_at"]))["createPost"]
     except Exception as e:
         if isinstance(e, PublishError) and isinstance(e.__cause__, TimeoutError):
             # Buffer received the post but never answered, so it may exist: sending it again could post it twice
@@ -331,9 +346,10 @@ def publications(owner: str, project_id: UUID) -> dict | None:
     if project is None:
         return None
     try:
+        token = allowed(owner)
         for row in due:
             try:
-                save(row["id"], call(POST, id=row["buffer_post_id"])["post"])
+                save(row["id"], call(POST, token=token, id=row["buffer_post_id"])["post"])
             except PublishError as e:
                 if e.code != "NOT_FOUND":
                     raise
@@ -364,7 +380,7 @@ def remove(owner: str, publication_id: UUID) -> dict | None:
     if row["buffer_post_id"] and row["status"] in ("sending", "sent"):
         raise PublishError("This post has already gone out. Delete it on the network itself.")
     if row["buffer_post_id"] and row["status"] != "error":
-        result = call(DELETE, id=row["buffer_post_id"])["deletePost"]
+        result = call(DELETE, token=allowed(owner), id=row["buffer_post_id"])["deletePost"]
         if "message" in result and "not found" not in result["message"].lower():  # not found: already gone
             raise PublishError(f"Buffer: {result['message']}", 502)
     storage.delete_public(video_name(publication_id))
