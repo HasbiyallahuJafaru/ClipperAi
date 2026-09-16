@@ -13,3 +13,4 @@ apps/docs/payment-api-integration.md
 
 # design previews: regenerate with `flutter test test/render.dart --update-goldens`
 apps/mobile/test/goldens/
+apps/website/urlimg.png
