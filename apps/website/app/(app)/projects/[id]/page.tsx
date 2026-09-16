@@ -59,7 +59,7 @@ export default function ProjectPage() {
 
   return (
     <article>
-      <PageHeader title={sourceLabel(project.source)} back={back}
+      <PageHeader title={sourceLabel(project)} back={back}
                   actions={isFinal(project.status)
                     ? <button className="btn" onClick={remove} disabled={busy}>Delete project</button>
                     : <button className="btn" onClick={cancel} disabled={busy || project.cancel_requested}>Cancel</button>}>

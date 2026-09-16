@@ -87,15 +87,18 @@ String errorMessage(http.Response response) {
 
 const running = ['queued', 'downloading', 'transcribing', 'analyzing', 'rendering', 'packaging'];
 
-String sourceLabel(String source) {
+String sourceLabel(String source, [String? title]) {
+  if (title != null && title.isNotEmpty) return title;
   if (source.startsWith('upload:')) return 'Uploaded video';
   final url = Uri.parse(source);
   return url.host.replaceFirst('www.', '') + url.path.replaceFirst(RegExp(r'/$'), '') + (url.hasQuery ? '?${url.query}' : '');
 }
 
-/// A short name for a small card: the site the video came from, or that it was uploaded.
-String sourceName(String source) =>
-    source.startsWith('upload:') ? 'Uploaded video' : Uri.parse(source).host.replaceFirst('www.', '');
+/// A short name for a small card: the video's own title, the site it came from, or that it was uploaded.
+String sourceName(String source, [String? title]) {
+  if (title != null && title.isNotEmpty) return title;
+  return source.startsWith('upload:') ? 'Uploaded video' : Uri.parse(source).host.replaceFirst('www.', '');
+}
 
 String plural(num n, String word) {
   final count = n is int || n == n.roundToDouble() ? n.round().toString() : '$n';
@@ -113,13 +116,14 @@ typedef Shared = ({String? link, File? video});
 String? sharedLink(String text) => RegExp(r'https?://\S+').firstMatch(text)?[0];
 
 /// The project options as the API takes them; throws a readable error for values the backend would refuse.
-Map<String, Object?> projectSettings(String clips, String shortest, String longest, {bool captions = true}) {
+Map<String, Object?> projectSettings(String clips, String shortest, String longest,
+    {bool captions = true, String orientation = '9:16'}) {
   final count = clips.trim().isEmpty ? null : int.tryParse(clips.trim());
   final (min, max) = (num.tryParse(shortest.trim()), num.tryParse(longest.trim()));
   if (clips.trim().isNotEmpty && (count == null || count < 1 || count > 30)) throw ApiError(422, 'Clips must be a number from 1 to 30.');
   if (min == null || max == null || min < 5 || max > 180) throw ApiError(422, 'Clip lengths must be between 5 and 180 seconds.');
   if (min > max) throw ApiError(422, 'The shortest clip must not be longer than the longest.');
-  return {'clips': count, 'min_seconds': min, 'max_seconds': max, 'captions': captions};
+  return {'clips': count, 'min_seconds': min, 'max_seconds': max, 'captions': captions, 'orientation': orientation};
 }
 
 const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

@@ -220,8 +220,8 @@ void main() {
   test('shared text and project options', () {
     expect(sharedLink('Watch this! https://youtu.be/abc?si=x1 so good'), 'https://youtu.be/abc?si=x1');
     expect(sharedLink('no link here'), isNull);
-    expect(projectSettings('', '30', '60'), {'clips': null, 'min_seconds': 30, 'max_seconds': 60, 'captions': true});
-    expect(projectSettings(' 8 ', '15', '45', captions: false), {'clips': 8, 'min_seconds': 15, 'max_seconds': 45, 'captions': false});
+    expect(projectSettings('', '30', '60'), {'clips': null, 'min_seconds': 30, 'max_seconds': 60, 'captions': true, 'orientation': '9:16'});
+    expect(projectSettings(' 8 ', '15', '45', captions: false), {'clips': 8, 'min_seconds': 15, 'max_seconds': 45, 'captions': false, 'orientation': '9:16'});
     for (final (clips, min, max, message) in [
       ('0', '30', '60', 'Clips must be'), ('abc', '30', '60', 'Clips must be'), ('', '2', '60', 'between 5 and 180'),
       ('', '30', '200', 'between 5 and 180'), ('', '60', '30', 'must not be longer'),

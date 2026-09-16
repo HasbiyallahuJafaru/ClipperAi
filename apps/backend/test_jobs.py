@@ -117,10 +117,12 @@ seen, limits, burned = [], [], []
 def fake_run(behaviour):
     """Stands in for the real pipeline: writes scratch + output files and reports progress like clipper.run."""
     def run(source, out, n, min_len, max_len, progress, load_transcript, save_transcript, work_root, max_seconds,
-            max_clips, captions):
+            max_clips, captions, orientation="9:16", on_meta=None):
         seen.append(Path(source).read_bytes() if Path(source).is_file() else source)
         limits.append((max_seconds, max_clips))
         burned.append(captions)
+        if on_meta is not None:
+            on_meta({"title": f"Shared video ({orientation})"})  # like the extractor reporting a YouTube title
         work_root.mkdir(parents=True, exist_ok=True)
         (work_root / "source.mp4").write_bytes(b"downloaded")
         progress("transcribing")
@@ -151,7 +153,7 @@ def upload_exists(source):
 
 # uploaded source, success: worker fetches the upload, clips land in storage behind signed links, local + source cleaned
 source = upload()
-p = jobs.create_project(ME, NewProject(source=source, clips=3))
+p = jobs.create_project(ME, NewProject(source=source, clips=3, orientation="1:1"))
 assert p["status"] == "queued" and p["message"] == "Waiting to start..."
 clipper.run = fake_run("ok")
 current = jobs.claim()
@@ -160,6 +162,8 @@ assert jobs.claim() is None, "the same project must not be claimed twice"
 jobs.run_job(current)
 done = status(p)
 assert done["status"] == "completed" and done["message"] == "Ready." and done["source_key"] == "Youtube-x"
+assert done["source_title"] == "Shared video (1:1)", "the source's own name is recorded for the UI"
+assert done["options"]["orientation"] == "1:1"
 assert seen[-1] == b"fake video", "the worker must process the uploaded bytes"
 assert limits[-1] == (3000 * 60, 500), "the worker passes the plan's remaining minutes and clips to the engine"
 assert burned[-1] is True, "captions are burned in unless the project turns them off"

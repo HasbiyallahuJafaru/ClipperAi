@@ -32,6 +32,7 @@ export type Clip = {
 export type Project = {
   id: string;
   source: string;
+  source_title?: string | null; // the source video's own name (e.g. the YouTube title), filled in while downloading
   status: Status;
   message: string;
   detail: string;
@@ -180,9 +181,10 @@ export function usePoll<T>(path: string, again: (data: T) => boolean, ms = 3000)
   return { data, setData, error, reload: () => setRound((n) => n + 1) };
 }
 
-export function sourceLabel(source: string) {
-  if (source.startsWith("upload:")) return "Uploaded video";
-  const url = new URL(source);
+export function sourceLabel(project: { source: string; source_title?: string | null }) {
+  if (project.source_title) return project.source_title;
+  if (project.source.startsWith("upload:")) return "Uploaded video";
+  const url = new URL(project.source);
   return url.hostname.replace(/^www\./, "") + url.pathname.replace(/\/$/, "") + url.search;
 }
 

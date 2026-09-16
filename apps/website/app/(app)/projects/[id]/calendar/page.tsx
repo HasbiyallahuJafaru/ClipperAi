@@ -85,7 +85,7 @@ export default function CalendarPage() {
   return (
     <article>
       <PageHeader title="Calendar"
-                  back={<Link href={`/projects/${id}`} className="inline-flex max-w-full items-center gap-1 hover:text-ink"><CaretLeft weight="bold" className="size-3.5 shrink-0" /><span className="truncate">{sourceLabel(project.source)}</span></Link>}>
+                  back={<Link href={`/projects/${id}`} className="inline-flex max-w-full items-center gap-1 hover:text-ink"><CaretLeft weight="bold" className="size-3.5 shrink-0" /><span className="truncate">{sourceLabel(project)}</span></Link>}>
         Spread your approved clips over the coming weeks. Buffer posts each one at its time, with the post written for
         each network.
       </PageHeader>

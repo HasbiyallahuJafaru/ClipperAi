@@ -145,4 +145,20 @@ with tempfile.TemporaryDirectory() as tmp:
     assert changed > 1000, f"burned captions must change the picture ({changed} pixels differ)"
     assert len(set(frames[False])) <= 3, "without captions the gray test picture stays plain"
 
+# orientation: every choice renders its own crop ratio, pixel size and matching caption play resolution
+with tempfile.TemporaryDirectory() as tmp:
+    src = Path(tmp) / "wide.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=gray:s=640x360:d=2", "-f", "lavfi",
+                    "-i", "sine=duration=2", "-shortest", str(src)], check=True)
+    for name, ((_, _), (w, h)) in clipper.ORIENTATIONS.items():
+        out = Path(tmp) / f"clip-{name.replace(':', 'x')}.mp4"
+        clipper.render(src, 0, 2, out, [{"word": "HELLO", "start": 0.2, "end": 1.8}], orientation=name)
+        probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                "stream=width,height", "-of", "json", str(out)], check=True,
+                               capture_output=True).stdout
+        size = json.loads(probe)["streams"][0]
+        assert (size["width"], size["height"]) == (w, h), (name, size)
+        caption_file = out.with_suffix(".ass").read_text()
+        assert f"PlayResX: {w}" in caption_file and f"PlayResY: {h}" in caption_file
+
 print("ok")

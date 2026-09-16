@@ -131,7 +131,7 @@ class _ProjectsPageState extends State<ProjectsPage> with Polling {
         _ => 'working',
       };
       if (filter != 'all' && filter != state) return false;
-      return words.isEmpty || sourceLabel(p['source']).toLowerCase().contains(words);
+      return words.isEmpty || sourceLabel(p['source'], p['source_title']).toLowerCase().contains(words);
     }).toList();
   }
 
@@ -303,7 +303,7 @@ class ProjectTile extends StatelessWidget {
             ]),
             const Spacer(),
             Text(
-              sourceName(project['source']),
+              sourceName(project['source'], project['source_title']),
               maxLines: 1, overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600, height: 1.2, letterSpacing: -0.2),
             ),
@@ -395,6 +395,7 @@ class _NewProjectState extends State<NewProject> {
   final longest = TextEditingController(text: '60');
   bool options = false;
   bool captions = true; // off for videos that already have subtitles burned in
+  String orientation = '9:16'; // 16:9 keeps the full frame, 1:1 makes squares
   double? uploaded; // 0..1 while a video is on its way
 
   @override
@@ -426,7 +427,8 @@ class _NewProjectState extends State<NewProject> {
       problem = null;
     });
     try {
-      final settings = projectSettings(clips.text, shortest.text, longest.text, captions: captions); // checked before a file is sent
+      final settings = projectSettings(clips.text, shortest.text, longest.text,
+          captions: captions, orientation: orientation); // checked before a file is sent
       final project = await widget.api.call('POST', '/projects', {'source': await source(), ...settings});
       if (mounted) Navigator.of(context).pop(project['id'] as String);
     } catch (e) {
@@ -492,6 +494,16 @@ class _NewProjectState extends State<NewProject> {
             ]),
             const SizedBox(height: 4),
             const Text('Left empty, about one clip per 2 minutes of video.', style: TextStyle(color: muted, fontSize: 12.5)),
+            DropdownButtonFormField<String>(
+              initialValue: orientation,
+              decoration: const InputDecoration(labelText: 'Orientation'),
+              items: const [
+                DropdownMenuItem(value: '9:16', child: Text('Vertical 9:16 (TikTok, Shorts, Reels)')),
+                DropdownMenuItem(value: '16:9', child: Text('Landscape 16:9 (YouTube, LinkedIn)')),
+                DropdownMenuItem(value: '1:1', child: Text('Square 1:1 (feed posts)')),
+              ],
+              onChanged: sending ? null : (value) => setState(() => orientation = value!),
+            ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero, value: captions, onChanged: sending ? null : (on) => setState(() => captions = on),
               title: const Text('Add captions', style: TextStyle(fontWeight: FontWeight.w500)),
@@ -614,7 +626,7 @@ class _ProjectPageState extends State<ProjectPage> with Polling {
             icon: Icon(PhosphorIconsBold.caretLeft, size: 20, color: ink),
             onPressed: () => Navigator.of(context).pop(),
           ),
-          title: Text(data == null ? 'Project' : sourceLabel(data['source']), overflow: TextOverflow.ellipsis),
+          title: Text(data == null ? 'Project' : sourceLabel(data['source'], data['source_title']), overflow: TextOverflow.ellipsis),
           actions: [
             if (data?['status'] == 'completed')
               IconButton(tooltip: 'Calendar', icon: Icon(PhosphorIconsRegular.calendarBlank, size: 21, color: ink), onPressed: openCalendar),

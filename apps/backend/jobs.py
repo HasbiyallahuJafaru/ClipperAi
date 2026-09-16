@@ -82,6 +82,8 @@ class NewProject(BaseModel):
     min_seconds: float = Field(30, ge=5, le=180)
     max_seconds: float = Field(60, ge=5, le=180)
     captions: bool = Field(True, description="Burn captions into the clips; turn off for videos that already have them")
+    orientation: Literal["9:16", "16:9", "1:1"] = Field(
+        "9:16", description="Clips are vertical by default; 16:9 keeps the full frame, 1:1 makes squares")
 
     @model_validator(mode="after")
     def check(self):
@@ -174,7 +176,7 @@ def create_project(owner: str, request: NewProject) -> dict:
     """Queues a project. Raises billing.LimitError if the plan doesn't allow another one this month."""
     billing.check_new_project(owner)
     options = {"n": request.clips, "min_len": request.min_seconds, "max_len": request.max_seconds,
-               "captions": request.captions}
+               "captions": request.captions, "orientation": request.orientation}
     with db.connect() as c:
         return present(c.execute("insert into projects (owner, source, options) values (%s, %s, %s) returning *",
                                  (owner, request.source, Jsonb(options))).fetchone())
@@ -355,6 +357,11 @@ def run_job(project: dict):
         if project_now["cancel_requested"]:
             raise Cancelled
 
+    def save_title(project_id: int, meta: dict):
+        if meta.get("title"):  # the source's own name (YouTube etc.), for the UI, saved as soon as it's known
+            with db.connect() as c:
+                c.execute("update projects set source_title = %s where id = %s", (meta["title"], project_id))
+
     threading.Thread(target=heartbeat, daemon=True).start()
     options, source, final = project["options"], project["source"], True
     try:
@@ -366,7 +373,9 @@ def run_job(project: dict):
                                       progress=progress, load_transcript=load_transcript,
                                       save_transcript=save_transcript, work_root=temp / "work",
                                       max_seconds=left["seconds"], max_clips=left["clips"],
-                                      captions=options.get("captions", True))  # older projects: on
+                                      captions=options.get("captions", True),  # older projects: on
+                                      orientation=options.get("orientation", "9:16"),
+                                      on_meta=lambda meta: save_title(pid, meta))
         progress("packaging", f"{len(clips)} clips")
         storage.delete_prefix(f"projects/{pid}/")  # leftovers from an earlier attempt
         for path in sorted(out.iterdir()):

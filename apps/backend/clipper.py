@@ -47,16 +47,19 @@ Return json only, best clip first:
 "description": "1-2 sentence summary", "hashtags": ["#example"],
 "posts": {{"tiktok": "...", "instagram": "...", "youtube": "...", "linkedin": "...", "facebook": "...", "x": "..."}}}}]}}"""
 
+# orientations a project can be clipped to: crop ratio (w, h) and output pixel size
+ORIENTATIONS = {"9:16": ((9, 16), (1080, 1920)), "16:9": ((16, 9), (1920, 1080)), "1:1": ((1, 1), (1080, 1080))}
+
 ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {width}
+PlayResY: {height}
 WrapStyle: 0
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,Montserrat,88,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,-1,0,0,0,100,100,0,0,1,7,3,2,80,80,560,1
+Style: Caption,Montserrat,88,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,-1,0,0,0,100,100,0,0,1,7,3,2,80,80,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -134,9 +137,10 @@ def duration_of(media: Path) -> float:
                                  str(media)], capture_output=True, text=True, check=True).stdout)
 
 
-def acquire(source: str, root: Path, progress=lambda percent: None) -> tuple[Path, Path]:
+def acquire(source: str, root: Path, progress=lambda percent: None, meta: dict | None = None) -> tuple[Path, Path]:
     """Return (video, work dir). The work dir under `root` is named by content id (Youtube-<id>, file hash): that name
-    is the transcript cache key. `progress(percent)` is called as a link downloads, in 5% steps."""
+    is the transcript cache key. `progress(percent)` is called as a link downloads, in 5% steps. `meta` (a dict the
+    caller owns) gets the source's own title when the extractor reports one."""
     if Path(source).is_file():
         with open(source, "rb") as f:
             work = root / hashlib.file_digest(f, "sha256").hexdigest()[:16]
@@ -171,7 +175,10 @@ def acquire(source: str, root: Path, progress=lambda percent: None) -> tuple[Pat
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
-            video = Path(ydl.extract_info(source)["requested_downloads"][0]["filepath"])
+            info = ydl.extract_info(source)
+            video = Path(info["requested_downloads"][0]["filepath"])
+            if meta is not None and info.get("title"):
+                meta["title"] = info["title"]
     except yt_dlp.utils.DownloadError as e:
         if "not a bot" in str(e) or "Sign in to confirm" in str(e):
             raise PermanentError("YouTube blocked our server from downloading this video. Upload the video file"
@@ -336,13 +343,15 @@ def shots(xs: list[float], deadzone: float, hold: int = 3) -> list[tuple[int, fl
     return [(s, statistics.median(xs[s:e])) for s, e in zip(starts, starts[1:] + [len(xs)])]
 
 
-def crop_filter(video: Path, start: float, end: float, fps: float = 4) -> str:
-    """9:16 crop that follows the speaker's face, falling back to center crop when no face is found."""
+def crop_filter(video: Path, start: float, end: float, ratio: tuple[int, int] = (9, 16), fps: float = 4) -> str:
+    """Crop of `ratio` (w, h) that follows the speaker's face horizontally, falling back to a centered crop when no
+    face is found."""
+    rw, rh = ratio
     w, h, xs = face_xs(video, start, end, fps)
-    cw, ch = min(w, h * 9 // 16) // 2 * 2, min(h, w * 16 // 9) // 2 * 2
+    cw, ch = min(w, h * rw // rh) // 2 * 2, min(h, w * rh // rw) // 2 * 2
     seen = [x for x in xs if x is not None]
     if not seen or cw == w:
-        return "crop='min(iw,ih*9/16)':'min(ih,iw*16/9)'"
+        return f"crop='min(iw,ih*{rw}/{rh})':'min(ih,iw*{rh}/{rw})'"
     filled, last = [], seen[0]
     for x in xs:  # frames without a face keep the last known position
         last = last if x is None else x
@@ -358,8 +367,11 @@ def ass_escape(text: str) -> str:
     return text.replace("\\", "").replace("{", "(").replace("}", ")")
 
 
-def captions(words: list[dict], start: float, end: float) -> str:
-    """ASS subtitles from the real transcript words: short groups, the spoken word highlighted."""
+def captions(words: list[dict], start: float, end: float, width: int = 1080, height: int = 1920) -> str:
+    """ASS subtitles from the real transcript words: short groups, the spoken word highlighted. The header's play
+    resolution follows the clip's orientation, and the bottom margin stays the same share of the height."""
+    header = ASS_HEADER.format(width=width, height=height, margin_v=round(560 * height / 1920))
+
     def ts(t):
         cs = max(0, round((t - start) * 100))
         return f"{cs // 360000}:{cs // 6000 % 60:02}:{cs // 100 % 60:02}.{cs % 100:02}"
@@ -373,7 +385,7 @@ def captions(words: list[dict], start: float, end: float) -> str:
         else:
             groups.append([w])
 
-    lines = [ASS_HEADER]
+    lines = [header]
     for gi, g in enumerate(groups):
         next_start = groups[gi + 1][0]["start"] if gi + 1 < len(groups) else end
         for i, w in enumerate(g):
@@ -383,16 +395,19 @@ def captions(words: list[dict], start: float, end: float) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render(video: Path, start: float, end: float, out: Path, words: list[dict], burn: bool = True):
+def render(video: Path, start: float, end: float, out: Path, words: list[dict], burn: bool = True,
+           orientation: str = "9:16"):
     """Write out (mp4), its .ass captions and a .jpg cover. `burn`: draw the captions into the video (off when the
-    source already has its own); the .ass file is written either way, for other editors."""
+    source already has its own); the .ass file is written either way, for other editors. `orientation` picks the
+    crop ratio and output size (ORIENTATIONS)."""
+    (rw, rh), (width, height) = ORIENTATIONS[orientation]
     out = out.resolve()
-    out.with_suffix(".ass").write_text(captions(words, start, end), encoding="utf-8")
+    out.with_suffix(".ass").write_text(captions(words, start, end, width, height), encoding="utf-8")
     # cwd = output dir and relative paths, so filter args carry no Windows drive colons (they break filter parsing)
     fonts = Path(os.path.relpath(FONTS, out.parent)).as_posix()
     burned = f",ass={out.stem}.ass:fontsdir={fonts}" if burn else ""
     ffmpeg("-ss", f"{start:.3f}", "-i", str(video.resolve()), "-t", f"{end - start:.3f}",
-           "-vf", f"{crop_filter(video, start, end)},scale=1080:1920,setsar=1{burned}",
+           "-vf", f"{crop_filter(video, start, end, (rw, rh))},scale={width}:{height},setsar=1{burned}",
            "-af", "loudnorm=I=-14:TP=-1.5:LRA=11", "-ar", "48000",
            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out.name, cwd=out.parent)
@@ -402,14 +417,19 @@ def render(video: Path, start: float, end: float, out: Path, words: list[dict], 
 
 def run(source: str, out: Path, n: int | None = None, min_len: float = 30, max_len: float = 60, *,
         progress, load_transcript, save_transcript, work_root: Path,
-        max_seconds: float | None = None, max_clips: int | None = None, captions: bool = True
-        ) -> tuple[str, Path, list[Clip]]:
+        max_seconds: float | None = None, max_clips: int | None = None, captions: bool = True,
+        orientation: str = "9:16", on_meta=None) -> tuple[str, Path, list[Clip]]:
     """The whole pipeline. `progress(stage, detail)` is called at every step (it may raise to cancel); transcripts
     are cached by source key through load/save; downloads go under `work_root`. `max_seconds` / `max_clips` cap the
     source length and clip count (plan allowances), checked before anything is paid for. `captions`: burn captions
-    into the clips (the caption files are made either way). Returns (source key, out dir, clips)."""
+    into the clips (the caption files are made either way). `orientation`: crop ratio and output size
+    (ORIENTATIONS). `on_meta(meta)` is called right after download with the source's own title, so the caller can
+    record it while the heavy stages still run. Returns (source key, out dir, clips)."""
+    meta: dict = {}
     progress("downloading")
-    video, work = acquire(source, work_root, lambda percent: progress("downloading", f"{percent}%"))
+    video, work = acquire(source, work_root, lambda percent: progress("downloading", f"{percent}%"), meta)
+    if on_meta is not None:
+        on_meta(meta)
     if max_seconds is not None and (seconds := duration_of(video)) > max_seconds:
         raise PermanentError(f"this video is {seconds / 60:.0f} minutes long, but only {max_seconds / 60:.0f} minutes"
                              " of video are left in your plan this month")
@@ -430,7 +450,8 @@ def run(source: str, out: Path, n: int | None = None, min_len: float = 30, max_l
     for i, clip in enumerate(clips, 1):
         progress("rendering", f"clip {i} of {len(clips)}")
         clip.start, clip.end = snap(clip.start, clip.end, transcript["words"])
-        render(video, max(0, clip.start - 0.1), clip.end + 0.2, out / f"clip{i:02}.mp4", transcript["words"], captions)
+        render(video, max(0, clip.start - 0.1), clip.end + 0.2, out / f"clip{i:02}.mp4", transcript["words"],
+               captions, orientation)
     (out / "clips.json").write_text(json.dumps([c.model_dump() for c in clips], indent=2, ensure_ascii=False),
                                     encoding="utf-8")
     return key, out, clips

@@ -55,7 +55,7 @@ export default function Dashboard() {
                   )}
                   <span className="grid min-w-0 flex-1 gap-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-6">
                     <span className="min-w-0">
-                      <span className="block truncate font-medium">{sourceLabel(p.source)}</span>
+                      <span className="block truncate font-medium">{sourceLabel(p)}</span>
                       <span className="text-sm text-muted">{when(p.created_at)}</span>
                     </span>
                     <span className="grid gap-2 sm:justify-items-end">
