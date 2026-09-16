@@ -70,6 +70,8 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
           <p>© 2026 YT-Clipper</p>
           <p>
             <Link href="/privacy" className="hover:text-ink">Privacy policy</Link>
+            <span className="px-2">·</span>
+            <Link href="/terms" className="hover:text-ink">Terms</Link>
           </p>
         </div>
       </footer>
