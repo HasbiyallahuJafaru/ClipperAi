@@ -76,7 +76,7 @@ class FakeBuffer:
             refresh token works exactly once (rotated, like the real one)."""
             def do_POST(self):
                 form = dict(urllib.parse.parse_qsl(self.rfile.read(int(self.headers["Content-Length"])).decode()))
-                if form.get("client_secret") != KEY:
+                if form.get("client_secret") not in (None, "", KEY):  # public clients send no secret (PKCE alone)
                     return self.reply(401, {"error": "invalid_client"})
                 if form["grant_type"] == "authorization_code":
                     return self.reply(200, fake.issue())

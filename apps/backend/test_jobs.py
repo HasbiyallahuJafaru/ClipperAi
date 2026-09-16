@@ -602,7 +602,20 @@ assert oauth.callback(*(lambda s: (s, "code-3"))(urllib.parse.parse_qs(
     urllib.parse.urlparse(oauth.connect_url(OTHER)).query)["state"][0]))["provider"] == "buffer"
 oauth.disconnect(OTHER)
 assert oauth.connection(OTHER) is None and oauth.token_for(OTHER) is None
-os.environ.pop("BUFFER_CLIENT_ID", None)
+# a public client (what we registered: PKCE, no secret) connects the same way without BUFFER_CLIENT_SECRET
+os.environ.pop("BUFFER_CLIENT_SECRET", None)
+state = urllib.parse.parse_qs(urllib.parse.urlparse(oauth.connect_url(OTHER)).query)["state"][0]
+account = oauth.callback(state, "code-4")
+assert oauth.token_for(OTHER) in buffer.access_tokens, "public-client connect (no secret) works"
+oauth.disconnect(OTHER)
+os.environ["BUFFER_CLIENT_SECRET"] = fake_payments.KEY  # a wrong secret must fail, not fall back to public mode
+state = urllib.parse.parse_qs(urllib.parse.urlparse(oauth.connect_url(OTHER)).query)["state"][0]
+try:
+    oauth.callback(state, "code-5")
+    raise AssertionError("a wrong client secret was accepted")
+except oauth.ConnectError:
+    pass
+del os.environ["BUFFER_CLIENT_SECRET"]  # production runs secret-less (public client)
 os.environ["BUFFER_API_KEY"] = fake_buffer.KEY
 
 # content calendar: approved clips spread over posting days and times, queued, then handed to Buffer by the worker

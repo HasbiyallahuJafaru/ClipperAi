@@ -48,15 +48,18 @@ def redirect_url() -> str:
     return f"{os.environ.get('WEBSITE_URL', 'http://127.0.0.1:3000')}/oauth/return"
 
 
-def _client():
-    client_id, secret = os.environ.get("BUFFER_CLIENT_ID"), os.environ.get("BUFFER_CLIENT_SECRET")
-    if not (client_id and secret):
-        raise ConnectError("Buffer sign-in isn't set up yet: register the app in Buffer (Settings, then API) and set"
-                           " BUFFER_CLIENT_ID and BUFFER_CLIENT_SECRET in the backend's .env.", 409)
-    return client_id, secret
+def _client() -> tuple[str, str]:
+    """(client id, client secret or ""). We registered a public client (PKCE, right for the mobile app), so Buffer
+    issued no secret; a confidential client's secret would come from BUFFER_CLIENT_SECRET."""
+    client_id = os.environ.get("BUFFER_CLIENT_ID")
+    if not client_id:
+        raise ConnectError("Buffer sign-in isn't set up yet: register the OAuth app in Buffer (Settings, then API)"
+                           " and set BUFFER_CLIENT_ID in the backend's .env.", 409)
+    return client_id, os.environ.get("BUFFER_CLIENT_SECRET", "")
 
 
 def _token_request(form: dict) -> dict:
+    form = {k: v for k, v in form.items() if v}  # a public client sends no client_secret at all
     request = urllib.request.Request(f"{AUTH}/token", urllib.parse.urlencode(form).encode(),
                                      {"Content-Type": "application/x-www-form-urlencoded"})
     try:
@@ -97,9 +100,9 @@ def callback(state: str, code: str) -> dict:
                         (state, STATE_TTL)).fetchone()
         if row is None:
             raise ConnectError("This connection attempt has expired. Start again.", 422)
-        client_id, secret = _client()
+        client_id, client_secret = _client()
         tokens = _token_request({"grant_type": "authorization_code", "code": code, "redirect_uri": redirect_url(),
-                                 "client_id": client_id, "client_secret": secret,
+                                 "client_id": client_id, "client_secret": client_secret,
                                  "code_verifier": row["verifier"]})
         account = c.execute("""
             insert into connected_accounts (owner, provider, account_id, account_name, access_token, refresh_token,
@@ -133,11 +136,11 @@ def token_for(owner: str, provider: str = "buffer") -> str | None:
                             (owner, provider)).fetchone()
         if account is None or account["expires_at"] > _soon():
             return account and account["access_token"]
-        client_id, secret = _client()
+        client_id, client_secret = _client()
         try:
             tokens = _token_request({"grant_type": "refresh_token",
                                      "refresh_token": account["refresh_token"], "client_id": client_id,
-                                     "client_secret": secret})
+                                     "client_secret": client_secret})
         except ConnectError:
             c.execute("delete from connected_accounts where id = %s", (account["id"],))
             raise ConnectError("Buffer disconnected your account. Connect it again to keep publishing.", 401)
