@@ -54,7 +54,13 @@ stopped.
    `fake_buffer`'s new auth endpoint (rotation, replay refusal, owner isolation). **To go live: register the app in
    Buffer → Settings → API with redirect `https://ytclipper.xyz/oauth/return`, set `BUFFER_CLIENT_ID` +
    `BUFFER_CLIENT_SECRET` on Railway + `.env`, deploy api + worker.**
-5. **New APK built** (`app-release.apk`, 61.2 MB, release, live API URL) — first build since the redesign; still
+5. **Video titles + orientation (2026-09-16, deployed):** projects now carry `source_title` (migration 009) — the
+   worker grabs the video's own title during download (`clipper.on_meta`) and the website/app show it instead of the
+   raw link (URL stays the fallback until the title arrives, e.g. when YouTube's bot wall blocks the download).
+   `NewProject.orientation` = 9:16 (default) / 16:9 / 1:1: `clipper.ORIENTATIONS` drives crop ratio, output size and
+   the caption play resolution/margins; website form has an Orientation dropdown, app has one in its options. The
+   APK in `apps/mobile/build/...` predates this — rebuild before testing orientation on a phone.
+6. **New APK built** (`app-release.apk`, 61.2 MB, release, live API URL) — first build since the redesign; still
    never run on a phone.
 
 ---
