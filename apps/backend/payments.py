@@ -82,6 +82,7 @@ def checkout(owner: str, email: str, plan: str) -> dict:
     kobo = round(usd_cents * ngn)  # price_cents is USD cents: * 100 for dollars, * 100 for kobo cancels out
     reply = call("POST", "/payment-api/payments/initialize", {
         "external_customer_id": owner, "email": email, "amount": kobo, "currency": "NGN", "plan": plan,
+        "channels": ["card"],  # cards only: no bank transfer, USSD or others
         "notification_url": f"{os.environ.get('PUBLIC_API_URL', 'http://127.0.0.1:8000')}/api/payments/callback",
         "callback_url": f"{os.environ.get('WEBSITE_URL', 'http://127.0.0.1:3000')}/checkout/return"})
     with db.connect() as c:
