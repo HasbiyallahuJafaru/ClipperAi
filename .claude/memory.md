@@ -1,12 +1,14 @@
 # Build memory
 
-Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI scrapped, pricing/capacity report,
-**accounts with Clerk**). Update after every milestone: move items from "Left" to "Done" with how they were verified.
+Last updated: 2026-09-16 (session 8: payments live (ZoomGuru/Paystack, NGN, 30-day plans), rate limiting + Railway
+Redis, everything deployed, new APK). Update after every milestone: move items from "Left" to "Done" with how they
+were verified.
 
 ## At a glance
-- **Built:** engine, jobs/worker, R2 storage, website (submit, review, ZIP, pricing/billing with payments off),
+- **Built:** engine, jobs/worker, R2 storage, website (submit, review, ZIP, pricing/billing with **live payments**),
   publishing through Buffer, content calendar, **Clerk accounts (sign-in/up, protected pages, backend token checks,
-  every project/plan/post owned by a Clerk org or user)**. Channels: **website + Flutter mobile app only** (MCP
+  every project/plan/post owned by a Clerk org or user)**, **payments (ZoomGuru/Paystack, USD prices charged in
+  Naira, 30 days per payment)**, backend rate limiting (Redis). Channels: **website + Flutter mobile app only** (MCP
   scrapped 2026-09-15).
 - **Pushed:** everything, incl. Clerk accounts + Next 16.3.5 patch (2026-09-15, commit "Accounts with Clerk...").
 - **Website redesign done and pushed** (bf42176 + serif heading accent 5f7e3af, 2026-09-15, see Done). **Next:**
@@ -438,6 +440,36 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
   accepted automatically by the build (platform 35 installed). NOT verified: installing/running on a phone.
 - **Buffer per-user (open question 2026-09-15):** Buffer docs say OAuth 2.0 + PKCE clients can be registered in Settings → API;
   third-party 2026 articles say third-party OAuth isn't enabled for new developers. User to check their Buffer settings.
+
+### Phase 9 — Payments + rate limiting (2026-09-16, session 8)
+- **Payments (ZoomGuru Payment API / Paystack) built, tested, deployed, live.** `payments.py` (+ `payments` table,
+  `subscriptions.expires_at`, `fx_rate` in migration 007): USD prices charged in kobo at a live USD→NGN rate
+  (open.er-api.com, 24 h cache in `fx_rate`, stale value kept on failure, seed 1600); each payment buys 30 days
+  (renewing the same plan stacks days, switching starts fresh); `apply()` is the only plan activator and runs once
+  per reference (`applied_at is null` update); webhook = HMAC-SHA512 over the raw body (`x-zoomguru-signature`),
+  throttled 30/min/IP; worker `reconcile_payments` thread re-verifies payments pending >15 min. `billing.subscribe`
+  refuses when `PAYMENT_API_KEY` is set (free path for dev/tests only). Routes: `POST /api/billing/checkout`
+  `{plan, email}`, `POST /api/payments/callback` (public), `GET /api/billing/payments/{ref}`. `kobo = round(usd_cents × rate)`
+  ($39 at ₦1500 → 5,850,000 kobo). Website: checkout takes an email (prefilled from `useUser`), shows the Naira
+  amount, redirects to Paystack; `/checkout/return` polls the status route. App shows the renewal date. Tests in
+  `test_jobs.py` via `fake_payments.py` (initialize/verify/pay()/callback(); `fail` switches unused).
+  Env: `PAYMENT_API_KEY`, `PUBLIC_API_URL` (webhook target — the API directly, not the auth'd website proxy),
+  `WEBSITE_URL` (browser return page), set on Railway api + `.env` (git-ignored; guide is
+  `apps/docs/payment-api-integration.md`, also git-ignored). **No real end-to-end purchase yet; rotate the key
+  before launch.**
+- **Rate limiting (api.py):** `limited(key, cap)` fixed window — Redis `INCR/EXPIRE` when `REDIS_URL` set, else
+  in-memory dict (with a 10k sweep); Redis errors fall back to memory. Caps: 240/min per owner (in `signed_in`),
+  10/min uploads, 10/min project starts, 5/min checkout, 30/min webhook per IP → 429. `redis==6.4.0` in
+  requirements. User picked Railway's own Redis over Upstash/memory-only (2026-09-16).
+- **Railway via CLI:** `railway add -d redis` — careful: its prompts confirm on piped newlines (three Redis
+  instances created; extras + detached volumes deleted with `railway service delete -s X -y` / `railway volume
+  delete -v X -y`; detached volumes linger in `status` output after deletion — `railway volume ls` is the truth).
+  Database services don't auto-inject `REDIS_URL`; set it to `redis://redis.railway.internal:6379` manually.
+  Deployed api `62132cad` + worker `6bf8bb93` (2026-09-16, 10:24): payments, rate limiting and session 7's
+  clip-count fix live; migration 007 ran on boot. Vercel auto-deployed the website from push `2bd3d35`.
+- **New APK** (`app-release.apk`, 61.2 MB, 2026-09-16): first since the redesign + renewal date; still not run on
+  a phone. All checks green: test_jobs (incl. payments), test_clipper, flutter analyze + 21 tests, website build +
+  check.mjs.
 
 ## Left
 

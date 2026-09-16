@@ -12,12 +12,13 @@ The guiding principle: **AI makes the decisions, proven software does the work.*
 and write the copy; FFmpeg, OpenCV and libass do the cutting, cropping and captioning. That keeps output accurate
 (caption text always comes from the real transcript) and costs low.
 
-> **Status:** the backend (engine, job system, storage, billing, publishing) is built, tested and **deployed on
-> Railway**; the website is **deployed on Vercel** from `main`: submit one or many videos, follow progress with the
-> video's picture and a progress bar, review clips, download everything as a ZIP, publish or schedule approved clips
-> through Buffer, spread them over a content calendar, and choose a plan (payments are switched off, so plans are free
-> for now). Accounts use Clerk. The **Flutter mobile app** covers the same flows and has been built and tested, but not
-> yet run on a phone. See [Status and roadmap](#status-and-roadmap).
+> **Status:** the backend (engine, job system, storage, billing, publishing, payments) is built, tested and
+> **deployed on Railway**; the website is **deployed on Vercel** from `main`: submit one or many videos, follow
+> progress with the video's picture and a progress bar, review clips, download everything as a ZIP, publish or
+> schedule approved clips through Buffer, spread them over a content calendar, and pay for a plan (prices in USD,
+> charged in Naira through Paystack; each payment buys 30 days). Accounts use Clerk. The **Flutter mobile app**
+> covers the same flows and has been built and tested, but not yet run on a phone. See
+> [Status and roadmap](#status-and-roadmap).
 
 ---
 
@@ -86,7 +87,7 @@ One account, one subscription and one usage balance, reachable two ways:
 
 | Channel | What it's for | Status |
 |---|---|---|
-| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Deployed on Vercel: submit (batch), progress, review, ZIP download, publish/schedule through Buffer, content calendar, pricing/checkout/billing with payments switched off, comparison and tool pages |
+| **Website** (`apps/website`) | The only place to **subscribe and pay**. Also the full product: submit videos, review clips, schedule posts, see usage. | Deployed on Vercel: submit (batch), progress, review, ZIP download, publish/schedule through Buffer, content calendar, pricing/checkout/billing with live payments (USD prices, Naira charge, 30 days per payment), comparison and tool pages |
 | **Mobile app** (`apps/mobile`, Flutter, Android first) | The product on a phone: paste or share a link (YouTube's Share button), pick a video, follow progress, review, edit and approve clips, save or share them, publish now or schedule, content calendar, see usage. No purchases in the app; plans are managed on the website. | Built and tested (13 tests); not yet run on a device; iOS build route not set up |
 
 Both are thin clients over the same backend. Sign-in, subscription checks and usage limits are enforced once, in the
@@ -320,8 +321,9 @@ npm run dev                    # http://localhost:3000  (or: npm run build && np
 | `/projects/{id}` | Live progress while processing (you can leave and come back), then every clip with a video preview, hook, title, description, per-platform posts with copy buttons, downloads, and **Approve / Reject / Edit**, plus **Approve all** and **Download all** (a ZIP of every clip that isn't rejected). Approved clips get **Publish**: choose Buffer channels and post now or at a time, then follow each post (posting, scheduled, posted with a link, or why it failed) and unschedule. Cancel or delete the project from here. |
 | `/settings/integrations` | Publishing: whether Buffer is connected, and which channels can take clips (and why others can't). |
 | `/pricing` | The three plans and their monthly limits. |
-| `/checkout?plan=pro` | Order summary ($0.00 due while payments are switched off) and **Start plan**. |
-| `/settings/billing` | Current plan, this month's usage against its limits, change or cancel the plan, billing history. |
+| `/checkout?plan=pro` | Order summary: the USD price, the Naira amount at the live rate, then Paystack's payment page. |
+| `/checkout/return` | Where Paystack sends you back; waits for the backend to confirm the payment. |
+| `/settings/billing` | Current plan and its renewal date, this month's usage against its limits, change or cancel the plan, billing history. |
 
 Accounts are [Clerk](https://clerk.com): sign in and sign up from the header (`/sign-in`, `/sign-up`). The home page
 and pricing are public; every other page asks you to sign in. The browser only ever calls the website's own `/api/*`
@@ -374,7 +376,9 @@ page gets one with `await window.Clerk.session.getToken()`; tokens last about a 
 | `PATCH` | `/api/projects/{id}/clips/{idx}` | Review a clip: approve / reject it, edit its copy | `200` |
 | `GET` | `/api/projects/{id}/package` | Download `content-package.zip` (see [Content package](#content-package)) | `200` |
 | `GET` | `/api/billing` | Plans, the current plan, this month's usage and billing history | `200` |
-| `POST` | `/api/billing/subscribe` | Start or switch plan: `{"plan": "creator" \| "pro" \| "business"}` | `201` |
+| `POST` | `/api/billing/checkout` | Start a payment: `{"plan", "email"}` → Paystack page + the Naira amount | `201` |
+| `GET` | `/api/billing/payments/{reference}` | One of my payments (for the return page's polling) | `200` |
+| `POST` | `/api/payments/callback` | The provider's signed webhook (HMAC-SHA512 over the raw body); activates the plan once per reference | `200` |
 | `POST` | `/api/billing/cancel` | End the current plan | `200` |
 | `GET` | `/api/publishing/channels` | The social accounts connected in Buffer, and whether each can take clips | `200` |
 | `POST` | `/api/projects/{id}/clips/{idx}/publish` | Post an approved clip to Buffer channels, now or at a time | `201` |
@@ -475,8 +479,12 @@ no extra space.
 
 ### Plans and limits
 
-A project can only start with an active plan. **Payments are switched off**: choosing a plan activates it at once,
-nothing is charged, and every billing record shows `charged_cents: 0`. There is one workspace (no accounts yet).
+A project can only start with an active plan. Plans are paid through the ZoomGuru Payment API (Paystack
+underneath): prices are shown in USD and charged in Naira at a live daily rate (last good rate kept as a fallback),
+and **each payment buys 30 days** — nothing is stored about cards and nothing charges itself; near the end the plan
+shows its renewal date and the customer pays again. A plan only ever activates from the provider's signed webhook
+(verified once per payment reference); if the webhook is missed, the worker re-verifies pending payments after 15
+minutes. Expired plans behave like cancelled ones.
 
 | Plan | Price shown | Videos a month | Hours of video a month | Clips a month |
 |---|---|---|---|---|
@@ -650,8 +658,10 @@ so it keeps working even if the backend is down. R2 removes expired objects with
   every query is limited to the caller's account, so one account can't read or change another's projects, plans or
   posts. The website only listens on `localhost` while publishing still uses one Buffer account.
 - **Usage limits are enforced in the backend**, not in the website, so no client can skip them.
-- **No payment data.** Payments are switched off; there is no card form and nothing is charged. When payments go live
-  they'll use a provider's hosted checkout, so card details never touch YT-Clipper's servers.
+- **No card data.** Payments happen on Paystack's hosted checkout; card details never touch YT-Clipper's servers,
+  and amounts are fixed by the backend at checkout time.
+- **Rate limits** on the backend (Redis when provided): 240 requests a minute per account, tighter on uploads
+  (10/min), project starts (10/min) and checkout attempts (5/min); over the cap answers `429`.
 - **Sources are validated** before any download: only public `http(s)` addresses or confirmed uploads. Local files,
   `localhost`, private networks and cloud metadata addresses are rejected.
 - **Uploads are restricted** to video content types and 5 GB, and the file must actually exist in storage before a
@@ -735,7 +745,7 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | Website: *Sign in to continue.* while signed in | The backend couldn't verify the session: `CLERK_SECRET_KEY` in `apps/backend/.env` must belong to the same Clerk app as the website's keys, and the site's address must be in `CLERK_AUTHORIZED_PARTIES`. |
 | Signed in, but pages act signed out (server log: *unable to resolve handshake*) | The website's server can't reach Clerk over HTTPS. Behind an HTTPS-scanning antivirus, start it with `NODE_EXTRA_CA_CERTS=<CA bundle>`; the backend needs `SSL_CERT_FILE=<CA bundle>`. |
 | Locally, downloads over ~1–2 MB stall and reset (`RetriesExceededError`, `WinError 10054`), or yt-dlp says `CERTIFICATE_VERIFY_FAILED` | Antivirus web scanning (seen with Avast Web Shield) is intercepting the traffic, even on `127.0.0.1`. Add exceptions for `127.0.0.1`/`localhost` and HTTPS scanning, or pause it while testing. |
-| `402 Choose a plan to start making clips.` | Pick any plan on `/pricing` (free while payments are switched off). |
+| `402 Choose a plan to start making clips.` | Pick a plan on `/pricing` and pay for 30 days. |
 | Publishing: *"Buffer isn't connected yet"* / *"Buffer didn't accept the API key"* | Create a key in Buffer (Settings → API), put it in `BUFFER_API_KEY` and restart the API. |
 | Publishing: *"Publishing isn't set up yet"* or Buffer says *"Video could not be read from its URL"* | Set up the public bucket (step 5 of [Set up the R2 bucket](#set-up-the-r2-bucket)) and check that `S3_PUBLIC_URL` opens a file in a private browser window. |
 | Publishing: no channels to choose | Connect the social accounts in Buffer first; *Reconnect it in Buffer* means Buffer lost access to that account. |
@@ -752,7 +762,7 @@ Screenshots are saved in your temp folder under `clipperai-walkthrough`.
 | 1–2 | Clipping engine: transcription, two-pass selection, speaker framing, captions, thumbnails, per-platform copy | ✅ Done |
 | 3 | Job system: REST API, Postgres queue, worker, retries, cancellation, crash recovery | ✅ Done |
 | 4 | Storage: R2, direct uploads, signed links, automatic cleanup | ✅ Done: tested against a local S3 and checked live on R2 |
-| 5 | Website: product UI, subscriptions and payments, usage | ✅ Deployed on Vercel: batch submit, progress, review, ZIP download, pricing/checkout/billing (payments switched off), SEO pages |
+| 5 | Website: product UI, subscriptions and payments, usage | ✅ Deployed on Vercel: batch submit, progress, review, ZIP download, pricing/checkout/billing (live payments), SEO pages |
 | 6 | Publishing through Buffer | ✅ Done: post now, scheduled and unscheduled posts tested through the website against real Buffer, YouTube and R2 |
 | 7 | Content calendar and scheduling | ✅ Done: plan, preview, Schedule all through the worker, calendar list, `calendar.csv`; against real Buffer: one post scheduled and unscheduled through the website, and a 30-post batch (Buffer's request limit not yet tried for real) |
 | 8 | Mobile app (Flutter, iOS + Android) on the same API | Built and tested on Android code; not yet run on a device; iOS build route and share extension to do |
@@ -763,7 +773,8 @@ Known limitations today:
 
 - Accounts use Clerk's development instance; a production instance and domain come with deployment. Publishing still
   runs through one Buffer account (`BUFFER_OWNERS`), so each account needs its own connection before a public launch.
-- Payments are switched off: plans show prices but charge nothing. No payment provider is connected yet.
+- Payments are live but no real end-to-end purchase has been made yet, and the API key should be rotated before a
+  public launch (it travelled through a chat).
 - Publishing uses one Buffer account (the workspace's key), every YouTube upload gets the "People & Blogs" category,
   and the public bucket uses Cloudflare's rate-limited `r2.dev` address until a custom domain is connected.
 - Buffer plans cap how many posts can be scheduled at once (10 on the account used for testing). Calendar posts past the

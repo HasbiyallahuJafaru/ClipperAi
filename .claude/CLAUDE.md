@@ -40,8 +40,9 @@ backend, Clerk Organizations for teams/workspaces, and sign-in in the mobile app
 community-maintained, pinned exactly; user accepted the beta risk 2026-09-15). Clerk app id:
 `app_3JMJIEqTu79eUjLFgFDsRzpNa7h` (always pass `--app` to `clerk init`). Website: `@clerk/nextjs` (`ClerkProvider` inside
 `<body>`, `await auth()`, Next 16 `proxy.ts` matcher includes `'/__clerk/:path*'` after `'/(api|trpc)(.*)'`). Never expose
-`CLERK_SECRET_KEY` to client code; don't read or print env files. Payments stay off; if they're switched on, ask
-whether to use Clerk Billing before choosing a provider. **Built 2026-09-15:** sign-in/up + protected pages, backend
+`CLERK_SECRET_KEY` to client code; don't read or print env files. **Payments are live (2026-09-16)**: ZoomGuru
+Payment API (Paystack), USD prices charged in Naira at a live daily rate, each payment buys 30 days, activation
+only through `payments.apply()` (once per reference). Secrets: `PAYMENT_API_KEY` in `.env` + Railway only. **Built 2026-09-15:** sign-in/up + protected pages, backend
 token verification, per-owner data; the app's native tokens carry no `azp`, so `api.signed_in` checks the site only
 when a token names one. Still a **development instance** (production instance comes with the domain).
 
@@ -96,7 +97,8 @@ what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
 - **Cost rules**: existing/cached transcript before paid STT (transcripts cached by source key in Postgres); cheapest
   acceptable model (deepseek-flash) before stronger (deepseek-v4-pro); cache results; temporary storage only; delete
   temp media; bounded worker concurrency; track real per-user costs (Phase 9). Don't sacrifice reliability for cents.
-- **Modular monolith.** No Redis, queues, ORMs or microservices until a demonstrated need.
+- **Modular monolith.** No queues, ORMs or microservices until a demonstrated need. (Redis exists only for rate
+  limiting, 2026-09-16: `REDIS_URL` on Railway, in-memory fallback; not a queue or cache layer.)
 - **Storage**: never Railway's filesystem for media. R2 with signed URLs; lifecycle rules delete `uploads/` (1 day)
   and `projects/` (30 days). Don't store users' source videos beyond processing. Only exception: a clip being
   published is copied to the public bucket (`S3_PUBLIC_BUCKET`, Buffer can't read signed links) and deleted once posted.
