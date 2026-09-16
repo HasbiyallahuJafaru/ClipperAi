@@ -467,6 +467,22 @@ were verified.
   Database services don't auto-inject `REDIS_URL`; set it to `redis://redis.railway.internal:6379` manually.
   Deployed api `62132cad` + worker `6bf8bb93` (2026-09-16, 10:24): payments, rate limiting and session 7's
   clip-count fix live; migration 007 ran on boot. Vercel auto-deployed the website from push `2bd3d35`.
+- **Per-user Buffer OAuth (2026-09-16, session 8):** the multi-user publishing fix, and the cheap one: Buffer client
+  registration is **self-serve** (Buffer → Settings → API; docs at developers.buffer.com/guides/authentication.html),
+  OAuth = Authorization Code + PKCE at auth.buffer.com, refresh tokens single-use + rotated, scopes `account:read
+  posts:write offline_access`. Built `oauth.py` + migration 008 (`connected_accounts` one-per-owner+provider,
+  `oauth_states` 10-min single-use, PKCE verifier stored server-side); `publishing.call(token=)` — owner's token
+  when connected, else the workspace key gated by `BUFFER_OWNERS`; `allowed()` returns the token to use; 401 with a
+  user token → "Connect it again" (401); failed refresh deletes the row (reconnect = only fix). Routes
+  `GET /api/publishing/connection`, `POST .../connect/buffer`, `POST .../callback` (route checks `state_owner` ==
+  caller), `DELETE .../connection`. Website: Connect/Disconnect on integrations + `/oauth/return` (app-group page,
+  code+state through the authed proxy). Env: `BUFFER_CLIENT_ID`, `BUFFER_CLIENT_SECRET`, `BUFFER_REDIRECT_URL`
+  (defaults off `WEBSITE_URL`). fake_buffer grew an auth endpoint (rotation, replay refusal) and accepts issued
+  access tokens. NOT live yet: user must register the Buffer app + set env + deploy.
+  **Research:** Masterjx9/socialmediascheduler = per-platform direct APIs but **no LICENSE** (README claims MIT,
+  file 404s) → read-only reference; Matthew-Selvam/Open-Dispatch = MIT, FastAPI self-hosted Buffer-alternative with
+  per-platform `publish()` adapters (~80 LOC, YouTube resumable + OAuth refresh, LinkedIn chunked upload) but
+  credentials-in-env (not multi-tenant) → adapter reference for direct APIs later; Buffer OAuth beat both on cost.
 - **New APK** (`app-release.apk`, 61.2 MB, 2026-09-16): first since the redesign + renewal date; still not run on
   a phone. All checks green: test_jobs (incl. payments), test_clipper, flutter analyze + 21 tests, website build +
   check.mjs.

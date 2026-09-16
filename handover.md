@@ -1,9 +1,9 @@
-# Handover: payments are built and live; test the checkout and the new APK on a phone
+# Handover: payments live; per-user Buffer OAuth built; register the Buffer app and go live
 
-Updated 2026-09-16 (session 8). **Pushed to `main`: `2bd3d35`** (payments, rate limiting), and **deployed to
-Railway the same day** (api `62132cad`, worker `6bf8bb93` — the clip-count fix from session 7 is live too). The
-website auto-deployed on Vercel from the push. Working tree is clean apart from the three files left uncommitted on
-purpose (`apps/website/urlimg.png`, root `package.json` + lock, `node_modules/`).
+Updated 2026-09-16 (session 8). **Pushed to `main`: `0808d2c`** (payments + rate limiting in `2bd3d35`, docs in
+`51742bd`, per-user Buffer OAuth in `0808d2c`), and **payments/rate limiting/clip-count deployed to Railway** (api
+`62132cad`, worker `6bf8bb93`). The website auto-deploys on Vercel from `main`. Working tree is clean apart from the
+three files left uncommitted on purpose (`apps/website/urlimg.png`, root `package.json` + lock, `node_modules/`).
 
 Start the next chat with:
 
@@ -44,7 +44,17 @@ stopped.
 3. **Railway set up via CLI:** one Redis service (an `add` prompt mishap created three; extras + volumes deleted),
    `REDIS_URL` wired to `redis.railway.internal:6379`, and `PAYMENT_API_KEY`, `PUBLIC_API_URL`, `WEBSITE_URL` set
    on api. Everything deployed: payments, rate limiting and the session-7 clip-count fix are live.
-4. **New APK built** (`app-release.apk`, 61.2 MB, release, live API URL) — first build since the redesign; still
+4. **Per-user Buffer OAuth (the multi-user publishing fix) is built, not yet live.** The cheap workaround over
+   direct platform APIs: Buffer client registration is **self-serve** (Buffer → Settings → API), so each user
+   connects their own Buffer account (Authorization Code + PKCE, single-use rotating refresh tokens) and publishes
+   through **their** channels and request limits — all six networks, no app reviews. Built: `oauth.py`, migration
+   `008_accounts.sql` (`connected_accounts`, `oauth_states`), `publishing.call(token=)` (owner's token, else the
+   workspace `BUFFER_OWNERS` key as fallback), routes `GET/POST /api/publishing/{connection,connect/buffer,callback}`,
+   website Connect/Disconnect on `/settings/integrations` + `/oauth/return` page. Tests in `test_jobs.py` via
+   `fake_buffer`'s new auth endpoint (rotation, replay refusal, owner isolation). **To go live: register the app in
+   Buffer → Settings → API with redirect `https://ytclipper.xyz/oauth/return`, set `BUFFER_CLIENT_ID` +
+   `BUFFER_CLIENT_SECRET` on Railway + `.env`, deploy api + worker.**
+5. **New APK built** (`app-release.apk`, 61.2 MB, release, live API URL) — first build since the redesign; still
    never run on a phone.
 
 ---
@@ -66,19 +76,21 @@ GitHub: https://github.com/HasbiyallahuJafaru/ClipperAi (**public**), branch `ma
 
 ## Open items waiting on the user
 
-1. **Test a real purchase end to end** (₦ amount at live rate, Paystack page, webhook, plan active 30 days,
+1. **Register the YT-Clipper app in Buffer → Settings → API** (redirect `https://ytclipper.xyz/oauth/return`) and
+   set `BUFFER_CLIENT_ID`/`BUFFER_CLIENT_SECRET` on Railway — then deploy api+worker and connect your own account
+   as the first per-user test. (Research notes: socialmediascheduler repo = no license, read-only reference;
+   Open-Dispatch = MIT, adapter reference for direct APIs later.)
+2. **Test a real purchase end to end** (₦ amount at live rate, Paystack page, webhook, plan active 30 days,
    renewal stacking). Payments charge real money now.
-2. **Vercel → website → Settings → Deployment Protection:** "Only Preview Deployments", otherwise nobody can open
+3. **Vercel → website → Settings → Deployment Protection:** "Only Preview Deployments", otherwise nobody can open
    the live site.
-3. **Rebuild/run the APK on a phone** — it's built (`apps/mobile/build/app/outputs/flutter-apk/app-release.apk`);
+4. **Run the APK on a phone** — it's built (`apps/mobile/build/app/outputs/flutter-apk/app-release.apk`);
    try Google sign-in (browser round-trip), email sign-in, playback, upload, share from YouTube.
-4. **Rotate the payment API key** before launch (it travelled through a chat and a file on disk; guide §7) — replace
+5. **Rotate the payment API key** before launch (it travelled through a chat and a file on disk; guide §7) — replace
    in Railway + `.env`. Same list as before: R2 token, delete Phase 6 test videos and old `out/`/`work/`, Instagram
    creator account, Groq paid plan, code license, preview logo missing the hyphen.
-5. **YouTube blocks Railway's servers** ("Sign in to confirm you're not a bot") — needs a residential proxy via
+6. **YouTube blocks Railway's servers** ("Sign in to confirm you're not a bot") — needs a residential proxy via
    `YTDLP_PROXY` on the worker (paid, user picks).
-6. **Buffer per-user connection:** until Buffer offers OAuth clients only `BUFFER_OWNERS` can publish (empty on
-   Railway → nobody can publish from the live site).
 7. **Pricing sanity:** our $15/$39/$99 vs OpusClip $29 / Submagic $39 / Klap $29; the earlier $12/$24/$59 + free
    60 minutes proposal would undercut them. Prices are real money now.
 8. Auto-detect burned-in subtitles? Asked, not built (the manual switch exists).
@@ -88,10 +100,12 @@ GitHub: https://github.com/HasbiyallahuJafaru/ClipperAi (**public**), branch `ma
 ## What's left to build
 
 1. Per-job cost tracking (Phase 9 remainder).
-2. Whatever breaks on a real phone; Play Store signing key (`android/key.properties`) and store listing. Upgrade
+2. Direct platform publishing (LinkedIn/YouTube/Threads) for users who won't use Buffer — port Open-Dispatch's MIT
+   adapters into the `connected_accounts` table (`provider` already allows it). Meta/TikTok need app reviews; X is
+   paid. Buffer OAuth covers everyone else.
+3. Whatever breaks on a real phone; Play Store signing key (`android/key.properties`) and store listing. Upgrade
    `receive_sharing_intent` to 1.9+ once Flutter's Android Gradle plugin supports compileSdk 37.
-3. iOS: a build route (Mac or cloud build) and the Share Extension.
-4. Buffer per-user connection.
+4. iOS: a build route (Mac or cloud build) and the Share Extension.
 5. Phase 10: domain + subdomains (ask before DNS), Clerk production instance, §46 tests (large/long/malformed
    videos, provider outages, duplicates, cost limits, cleanup).
 6. Smaller: Buffer's 10-scheduled-post cap, brand settings, real video titles, real clip frames for the landing
