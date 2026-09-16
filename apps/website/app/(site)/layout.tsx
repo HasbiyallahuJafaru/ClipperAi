@@ -66,7 +66,12 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
             </ul>
           </nav>
         </div>
-        <p className="mx-auto max-w-6xl border-t border-line px-4 py-6 text-sm text-muted sm:px-6">© 2026 YT-Clipper</p>
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-6 text-sm text-muted sm:px-6">
+          <p>© 2026 YT-Clipper</p>
+          <p>
+            <Link href="/privacy" className="hover:text-ink">Privacy policy</Link>
+          </p>
+        </div>
       </footer>
     </>
   );
