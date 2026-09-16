@@ -602,8 +602,20 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
 - Checks: `flutter analyze` clean, `flutter test` 21 app tests + the sign-in test, website build + check.mjs, backend
   tests. Screens were reviewed as rendered pictures (`flutter test test/render.dart --update-goldens`, goldens
   git-ignored); that found a real crash (a post with no date) and the label/step cleanups.
-- **Payments are next** (user, 2026-09-16): ZoomGuru Payment API (Paystack), charge in Naira, show USD. The doc is
-  `apps/docs/payment-api-integration.md`, **git-ignored because it holds a live secret** and the repo is public.
+- **Payments are next; decided but not built** (user, 2026-09-16): the **ZoomGuru Payment API** (Paystack underneath),
+  guide at `apps/docs/payment-api-integration.md` (**git-ignored: it holds a live secret** and the repo is public; the
+  key goes in `apps/backend/.env` as `PAYMENT_API_KEY` and on Railway, and is worth rotating before launch).
+  - **Charge in Naira, show USD.** Plans stay $15 / $39 / $99; the charge is that price converted to kobo.
+  - **The USD→NGN rate is fetched live and refreshed daily**, last good rate kept as the fallback. Checkout says what
+    is really charged ("$15.00 a month, charged as ₦24,000").
+  - **Each payment buys 30 days**, then a "Renew" button; no card kept, nothing self-charges (the payment API does not
+    manage subscriptions, and this avoids storing cards).
+  - Shape of the work in handover.md: `payments.py`, a `payments` table + subscription expiry, checkout route,
+    signature-verified callback (HMAC-SHA512 over the raw body) plus an authoritative verify, a worker pass that
+    re-verifies stale pendings, website checkout/return pages, a fake payment API in the tests.
+- **Clip count stays about one per 2 minutes** (user, 2026-09-16, asked because `jobs.py` had been hand-edited to say
+  one per minute; that line now matches the code).
+- Pushed 2026-09-16: `68db596` (clip count, sign-in fix, app redesign, website parity).
 
 ## Lessons learned / gotchas
 - **clerk_auth restarts a sign-in when the typed identifier differs from Clerk's (case)** — patched copy in
