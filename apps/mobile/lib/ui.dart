@@ -26,7 +26,12 @@ mixin Polling<T extends StatefulWidget> on State<T> {
       _timer?.cancel();
       if (busy(fresh)) _timer = Timer(every, load);
     } catch (e) {
-      if (mounted) setState(() => error = e);
+      // A refresh that fails (a network blip on the phone) isn't worth a toast: what's on screen stays and the
+      // poll tries again. Only a first load that never succeeded shows the error panel.
+      if (!mounted) return;
+      if (data == null) setState(() => error = e);
+      _timer?.cancel();
+      _timer = Timer(data == null ? every * 2 : every, load);
     }
   }
 

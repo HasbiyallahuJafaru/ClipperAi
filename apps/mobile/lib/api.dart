@@ -26,9 +26,22 @@ class Api {
   final String base;
   final http.Client _http;
 
+  Future<String> tokenWithRetry() async {
+    /// The Clerk token endpoint runs over the phone's network, and one dropped connection mid-refresh used to fail
+    /// the whole request (seen as a raw "ClientException ... (EXTERNAL ERROR)" toast). A short retry rides blips out.
+    for (var attempt = 1;; attempt++) {
+      try {
+        return await token();
+      } catch (e) {
+        if (attempt >= 3) rethrow;
+        await Future<void>.delayed(Duration(seconds: attempt));
+      }
+    }
+  }
+
   Future<dynamic> call(String method, String path, [Object? body]) async {
     final request = http.Request(method, Uri.parse('$base/api$path'))
-      ..headers['Authorization'] = 'Bearer ${await token()}';
+      ..headers['Authorization'] = 'Bearer ${await tokenWithRetry()}';
     if (body != null) {
       request.headers['Content-Type'] = 'application/json';
       request.body = jsonEncode(body);
@@ -67,7 +80,7 @@ class Api {
   /// Saves a file to [to]: an API path (with the session token) or a signed storage link (the link is the permission).
   Future<File> download(String path, File to, {bool signedIn = false}) async {
     final request = http.Request('GET', Uri.parse(path.startsWith('http') ? path : '$base/api$path'));
-    if (signedIn) request.headers['Authorization'] = 'Bearer ${await token()}';
+    if (signedIn) request.headers['Authorization'] = 'Bearer ${await tokenWithRetry()}';
     final response = await _http.send(request);
     if (response.statusCode >= 400) throw ApiError(response.statusCode, "That file didn't download. Try again.");
     await response.stream.pipe(to.openWrite());
