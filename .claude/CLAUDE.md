@@ -122,6 +122,9 @@ what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
   `YT-Clipper` holds competitors, positioning and the research log.
 
 ## Security rules
+- **Push/deploy only on explicit request (user, 2026-09-16):** commit locally when work is done, but never `git push`,
+  `railway up`, or trigger a deploy unless the user asks for it in that instruction. Note: pushing `main` also
+  auto-deploys the website on Vercel — treat "push" as a deploy decision.
 - **The GitHub repo is public** (github.com/HasbiyallahuJafaru/ClipperAi). Never commit `.env`, keys, tokens,
   `pgdata/`, media. Scan staged files for secrets before every commit. Never print key values in output.
 - Secrets only in `apps/backend/.env` (template: `.env.example`); no API keys in the website or the mobile app.
