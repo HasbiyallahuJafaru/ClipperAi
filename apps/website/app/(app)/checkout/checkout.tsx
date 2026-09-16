@@ -14,14 +14,13 @@ const naira = (kobo: number) => `₦${(kobo / 100).toLocaleString("en-NG")}`;
 export function Checkout({ planId }: { planId: string }) {
   const { user } = useUser();
   const { data, error } = usePoll<Billing>("billing", () => false);
-  const [email, setEmail] = useState("");
   const [quote, setQuote] = useState<Quote | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState("");
 
   const plan = data?.plans.find((p) => p.id === planId);
   const current = data?.plans.find((p) => p.id === data.subscription?.plan);
-  const address = email || user?.primaryEmailAddress?.emailAddress || "";
+  const address = user?.primaryEmailAddress?.emailAddress ?? ""; // the account's email, always the receipt's
 
   async function start() {
     setBusy(true);
@@ -89,11 +88,12 @@ export function Checkout({ planId }: { planId: string }) {
                  href={quote.authorization_url}>Pay {naira(quote.kobo)} — continue to payment</a>
             ) : (
               <div className="mt-6 grid gap-3">
-                <label className="text-sm text-muted" htmlFor="email">Email for your receipt</label>
-                <input id="email" type="email" className="input" value={address} placeholder="you@example.com"
-                       onChange={(e) => setEmail(e.target.value)} />
-                <button className="btn btn-primary h-12 w-full" onClick={start}
-                        disabled={busy || !address.includes("@")}>
+                <p className="text-sm text-muted">
+                  Receipt goes to{" "}
+                  <span className="font-medium text-ink">{address || "your account email"}</span> — the email on your
+                  account, changeable in your profile.
+                </p>
+                <button className="btn btn-primary h-12 w-full" onClick={start} disabled={busy || !address}>
                   {busy ? "Getting the price..." : `Start ${plan.name} plan`}
                 </button>
               </div>
