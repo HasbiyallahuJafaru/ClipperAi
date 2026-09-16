@@ -1,0 +1,190 @@
+import 'package:clerk_auth/src/models/client/auth_object.dart';
+import 'package:clerk_auth/src/models/client/factor.dart';
+import 'package:clerk_auth/src/models/client/strategy.dart';
+import 'package:clerk_auth/src/models/client/user_public.dart';
+import 'package:clerk_auth/src/models/client/verification.dart';
+import 'package:clerk_auth/src/models/enums.dart';
+import 'package:clerk_auth/src/models/informative_to_string_mixin.dart';
+import 'package:clerk_auth/src/models/status.dart';
+import 'package:clerk_auth/src/utils/extensions.dart';
+import 'package:clerk_auth/src/utils/json_serialization_helpers.dart';
+import 'package:json_annotation/json_annotation.dart';
+import 'package:meta/meta.dart';
+
+part 'sign_in.g.dart';
+
+/// [SignIn] Clerk object
+@immutable
+@JsonSerializable()
+class SignIn extends AuthObject with InformativeToStringMixin {
+  /// Constructor
+  const SignIn({
+    required super.id,
+    required this.status,
+    this.identifier,
+    this.userData,
+    required this.supportedIdentifiers,
+    required this.supportedFirstFactors,
+    this.firstFactorVerification,
+    required this.supportedSecondFactors,
+    this.secondFactorVerification,
+    this.createdSessionId,
+    this.abandonAt = DateTimeExt.epoch,
+  });
+
+  @override
+  String get urlType => 'sign_ins';
+
+  /// status
+  final Status status;
+
+  /// supported identifiers
+  @JsonKey(defaultValue: [])
+  final List<String> supportedIdentifiers;
+
+  /// identifier
+  final String? identifier;
+
+  /// user data
+  final UserPublic? userData;
+
+  /// first factor verification
+  final Verification? firstFactorVerification;
+
+  /// second factor verification
+  final Verification? secondFactorVerification;
+
+  /// created session id
+  final String? createdSessionId;
+
+  /// abandon at
+  @JsonKey(fromJson: intToDateTime, toJson: dateTimeToInt)
+  final DateTime abandonAt;
+
+  /// supported first factors
+  @JsonKey(defaultValue: [])
+  final List<Factor> supportedFirstFactors;
+
+  /// supported second factors
+  @JsonKey(defaultValue: [])
+  final List<Factor> supportedSecondFactors;
+
+  /// Empty [SignIn]
+  static const empty = SignIn(
+    id: '~empty~',
+    status: Status.unknown,
+    supportedFirstFactors: [],
+    supportedIdentifiers: [],
+    supportedSecondFactors: [],
+  );
+
+  /// The currently most important verification
+  Verification? get verification {
+    return switch (status) {
+      Status.needsFirstFactor => firstFactorVerification,
+      Status.needsSecondFactor => secondFactorVerification,
+      Status.needsClientTrust => secondFactorVerification,
+      _ => firstFactorVerification ?? secondFactorVerification,
+    };
+  }
+
+  /// Does this [SignIn] require preparation for the given [Strategy]?
+  bool requiresPreparationFor(Strategy strategy) =>
+      strategy.requiresPreparation && verification is! Verification;
+
+  /// Do we have a verification in operation>?
+  bool get hasVerification => verification is Verification;
+
+  /// Do we need a first factor?
+  bool get needsFirstFactor => status == Status.needsFirstFactor;
+
+  /// Do we need a second factor?
+  bool get needsSecondFactor => status == Status.needsSecondFactor;
+
+  /// Do we need client trust?
+  bool get needsClientTrust => status == Status.needsClientTrust;
+
+  /// Do we need a factor?
+  bool get needsFactor {
+    return needsFirstFactor || needsSecondFactor || needsClientTrust;
+  }
+
+  /// Is this [SignIn] transferable to a [SignUp]?
+  bool get isTransferable => verification?.status.isTransferable == true;
+
+  /// Find a [Verification] if one exists for this [SignIn]
+  /// at the given [Stage]
+  ///
+  Verification? verificationFor(Stage stage) {
+    return switch (stage) {
+      Stage.first => firstFactorVerification,
+      Stage.second => secondFactorVerification,
+    };
+  }
+
+  /// Do we have a [verification] for strategy happening?
+  bool isVerifying(Stage stage, Strategy strategy) {
+    if (verificationFor(stage) case Verification verification) {
+      return verification.strategy == strategy &&
+          verification.status.isVerified == false;
+    }
+    return false;
+  }
+
+  /// Find a list of [Factor]s for this [SignIn]
+  /// at the given [Stage]
+  ///
+  List<Factor> factorsFor(Stage stage) {
+    return switch (stage) {
+      Stage.first => supportedFirstFactors,
+      Stage.second => supportedSecondFactors,
+    };
+  }
+
+  /// Do we need factors for the given [Stage]?
+  ///
+  bool needsFactorsFor(Stage stage) {
+    return switch (stage) {
+      Stage.first => needsFirstFactor,
+      Stage.second => needsSecondFactor,
+    };
+  }
+
+  /// The factors for the current status
+  List<Factor> get factors {
+    return switch (status) {
+      Status.needsFirstFactor => supportedFirstFactors,
+      Status.needsSecondFactor => supportedSecondFactors,
+      _ => const [],
+    };
+  }
+
+  /// can we handle the password strategy?
+  bool get canUsePassword => factors.any((f) => f.strategy.isPassword);
+
+  /// Find the [Factor] for this [SignIn] that matches
+  /// the [strategy] and optional [stage], or null
+  ///
+  Factor? factorFor(
+    Strategy strategy, {
+    Stage? stage,
+  }) {
+    final factors = switch (stage) {
+      Stage.first => supportedFirstFactors,
+      Stage.second => supportedSecondFactors,
+      null => this.factors,
+    };
+    for (final factor in factors) {
+      if (factor.strategy == strategy) return factor;
+    }
+
+    return null;
+  }
+
+  /// fromJson
+  static SignIn fromJson(Map<String, dynamic> json) => _$SignInFromJson(json);
+
+  /// toJson
+  @override
+  Map<String, dynamic> toJson() => _$SignInToJson(this);
+}

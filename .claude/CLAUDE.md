@@ -181,17 +181,21 @@ clerk doctor                 # Clerk integration health (CLI 3.3, logged in, lin
 ```
 Mobile app (run from `apps/mobile`; Flutter 3.47 at `C:/dev/flutter`):
 ```bash
-flutter analyze && flutter test            # 13 tests: API client, uploads, screens, publishing, calendar, options
+flutter analyze && flutter test            # 21 tests + the Clerk sign-in test (test/render.dart is a design tool, not a test)
 # release APK against the live API (the Clerk publishable key is public; read it from the CLI, never print it):
 export NODE_EXTRA_CA_CERTS=C:/Users/USER/.certs/ca-bundle-with-windows-roots.pem
 export JAVA_TOOL_OPTIONS="-Djavax.net.ssl.trustStoreType=Windows-ROOT"   # this PC: Gradle downloads behind Avast
 KEY=$(clerk apps list --json | python -c "import json,sys; print(json.load(sys.stdin)[0]['instances'][0]['publishable_key'])")
 flutter build apk --release --dart-define=API_URL=https://api-production-e0fc.up.railway.app --dart-define=CLERK_PUBLISHABLE_KEY="$KEY"
 ```
+Output: `build/app/outputs/flutter-apk/app-release.apk` (built 2026-09-15, 59 MB, ~4 min once Gradle is cached).
 Release builds refuse to start without both dart-defines. Release signing reads `android/key.properties` (never
-committed); without it the APK is debug-signed (fine for testing, not for the Play Store). Android SDK licences must be
-accepted by the user (`flutter doctor --android-licenses`). To look at screens without a device, render them with a
-throwaway golden test that loads the real fonts, then delete it.
+committed); without it the APK is debug-signed (fine for sideloading, not for the Play Store). `receive_sharing_intent`
+is pinned to 1.8.1 (1.9.0 needs compileSdk 37, beyond AGP 9.1) and needs `kotlin.jvm.target.validation.mode=warning`
+in `android/gradle.properties`; undo both when AGP supports 37. If Clerk sign-in fails in the app, enable native
+applications in the Clerk dashboard (dev instance). **To look at the screens without a device:**
+`flutter test test/render.dart --update-goldens` writes every screen (real fonts and photo) to `test/goldens/`,
+which is git-ignored; read the pictures, then fix what they show.
 
 Deploy (backend): `railway up --service api --detach` and `--service worker` from `apps/backend` (CLI logged in).
 Railway variables are set per service (names only: `railway variables --service api --json` → keys); never print

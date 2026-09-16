@@ -429,6 +429,13 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
   Website: "Add captions" checkbox in Options, hook banner removed from sample ClipFrames/CSS, FAQ answer for videos
   that already have subtitles. Auto-detecting burned-in subtitles NOT built (would need OpenCV text detection on
   sampled frames; asked the user). Backend deployed with `railway up`.
+- **Release APK built (2026-09-15):** `apps/mobile/build/app/outputs/flutter-apk/app-release.apk`, 59 MB, label
+  YT-Clipper, `xyz.ytclipper.app`, minSdk 24 / target 36, API_URL = Railway, Clerk dev publishable key (read from
+  `clerk apps list --json`, never printed), debug-signed. Two failures on the way: `receive_sharing_intent` 1.9.0 needs
+  compileSdk 37 (AGP 9.1 supports 36) → pinned 1.8.1 (same API; analyze + 13 tests pass); 1.8.1 then failed Kotlin/Java
+  target validation (Java 11 vs Kotlin 21) → `kotlin.jvm.target.validation.mode=warning` in android/gradle.properties.
+  Gradle through Avast works with `JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStoreType=Windows-ROOT`; SDK licences were
+  accepted automatically by the build (platform 35 installed). NOT verified: installing/running on a phone.
 - **Buffer per-user (open question 2026-09-15):** Buffer docs say OAuth 2.0 + PKCE clients can be registered in Settings → API;
   third-party 2026 articles say third-party OAuth isn't enabled for new developers. User to check their Buffer settings.
 
@@ -561,7 +568,47 @@ Last updated: 2026-09-15 (session 4: Phase 7, real Buffer tests, Telegram/CLI sc
   video); minutes = speech length of completed projects; ZIP bytes flow through the API server.
 - STT fallback when needed: onnx-asr + Parakeet v3 on CPU (~$0.01/audio-hr, European languages only).
 
+### 2026-09-15 (session 7) — debugging: only 3 clips, app sign-in loop
+- **Only 3 clips:** the automatic count was `round(speech seconds / 360)` with a floor of 3, so every video under ~21 min
+  got 3. Now one per 2 minutes (3–30; an hour → 30); DeepSeek `max_tokens` 16000 → 64000 (30 clips of copy ≈ 12K
+  tokens + thinking; model max output 384K). Website hint, FAQ, tools page and README say "about one per 2 minutes".
+  Check: `test_clipper.py` asserts an hour → 30, 20 min → 10.
+- **App sign-in "Incorrect code (ERROR RECEIVED FROM SERVER)" loop:** reproduced against the dev instance with the SDK
+  itself. Password sign-in from a new device gets `needs_second_factor` (Clerk Client Trust, email code).
+  `clerk_auth` 0.0.18-beta (newest) compares the typed identifier with Clerk's lowercased copy; any capital → new
+  sign-in + a new code at the code step, so the typed code is always wrong. Fix: `apps/mobile/third_party/clerk_auth`
+  (copy, one-line case-insensitive compare, `dependency_overrides`, excluded from lints). Check:
+  `test/sign_in_test.dart` replays recorded Clerk replies (`test/clerk/*.json`, no tokens); fails on the unpatched SDK.
+  Verified live: capitalised email and username keep one sign-in, right code signs in. Backend accepted the native
+  token (billing/projects 200) and Clerk's native API is enabled, so neither was the cause.
+- Checks: test_clipper ok, test_jobs ok, flutter analyze clean, flutter test 14 passing, next build ok, check.mjs ok
+  (on :3001; an older server holds :3000 and an older backend :8000). walkthrough.mjs not run (needs :8000).
+- Pending: rebuild the APK and try it on the phone; not deployed (Railway worker needs `railway up` for the clip count).
+
+### 2026-09-16 (session 7 continued) — the app redesigned, browser sign-in, website parity
+- **Look** (user's reference screenshot + our colours/photo): welcome screen = sky photo, logo, curved white sheet with
+  *Continue with Google* / *Continue with email*; signed-in app = floating four-place bar (Projects, Publishing, Plan,
+  Account), search + filter chips, two-column picture tiles. Files: `welcome.dart`, `home.dart` (shell, `NavBar`,
+  `Account` inherited widget, `PageTop`, `Avatar`), `screens.dart` (projects, project, clips), `publish.dart`
+  (editor, publish, posts, calendar), `account.dart` (publishing, plan, account), `ui.dart` (shared pieces).
+- **Website parity added:** Publishing page (Buffer + channels), plan price/start/cancel/history/every plan, progress
+  steps, Approve all, Download all (zip through the share sheet), per-clip file chips, clip timing, each clip's posts
+  with View post and Unschedule, calendar grouped by day. Plans still open the website (store rules).
+- **Google/Apple sign-in now opens the phone's browser** and returns through `xyz.ytclipper.app://sso-callback`
+  (`redirectionGenerator` + `app_links` in `clerkConfig`, intent-filter + `flutter_deeplinking_enabled=false` in the
+  manifest). Clerk accepts the scheme (checked live against the dev instance). Email stays in the app (user's choice).
+- **`phosphor_flutter` can't compile on Flutter 3.47** (`IconData` is now final; analyze passes, build fails) →
+  `phosphor_icons` 3.0.1 instead.
+- Checks: `flutter analyze` clean, `flutter test` 21 app tests + the sign-in test, website build + check.mjs, backend
+  tests. Screens were reviewed as rendered pictures (`flutter test test/render.dart --update-goldens`, goldens
+  git-ignored); that found a real crash (a post with no date) and the label/step cleanups.
+- **Payments are next** (user, 2026-09-16): ZoomGuru Payment API (Paystack), charge in Naira, show USD. The doc is
+  `apps/docs/payment-api-integration.md`, **git-ignored because it holds a live secret** and the repo is public.
+
 ## Lessons learned / gotchas
+- **clerk_auth restarts a sign-in when the typed identifier differs from Clerk's (case)** — patched copy in
+  `apps/mobile/third_party`; drop it when an upstream release fixes it. Clerk FAPI returns 403 to Python's default
+  user agent (set one when scripting it).
 - **Clerk native tokens have no `azp`**: `clerk-backend-api`'s `authorized_parties` rejects them; check `azp` only when
   present (`api.signed_in`).
 - **Gradle behind Avast**: the wrapper download fails with PKIX errors; Java must use the Windows trust store

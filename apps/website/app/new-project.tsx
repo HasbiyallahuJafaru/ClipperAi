@@ -164,7 +164,7 @@ export function NewProject() {
           <label className="grid content-start gap-2 text-sm font-medium">
             Clips per video
             <input name="clips" type="number" min={1} max={30} placeholder="Automatic" className="input" />
-            <span className="font-normal text-muted">About one per 6 minutes if left empty.</span>
+            <span className="font-normal text-muted">About one per 2 minutes if left empty.</span>
           </label>
           <label className="grid content-start gap-2 text-sm font-medium">
             Shortest clip, seconds

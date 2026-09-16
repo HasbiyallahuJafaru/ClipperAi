@@ -6,7 +6,7 @@ export const QUESTIONS: [question: string, answer: string][] = [
   ["What videos can I use?",
     "A link to a public video, or files you upload, up to 5 GB each. Podcasts, interviews, talks and webinars work best, because clips are picked from what people say."],
   ["How many clips do I get?",
-    "About one for every six minutes of video, between 3 and 30, or the number you choose. Clips are 30 to 60 seconds unless you change it."],
+    "About one for every two minutes of video, between 3 and 30, or the number you choose. Clips are 30 to 60 seconds unless you change it."],
   ["Do clips have a watermark?",
     "No. No clip ever has a watermark, on any plan."],
   ["Does YT-Clipper use credits?",

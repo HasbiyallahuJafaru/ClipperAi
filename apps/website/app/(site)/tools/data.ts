@@ -19,7 +19,7 @@ export const TOOLS: Tool[] = [
     intro: "Paste a YouTube link. YT-Clipper finds the strongest moments, cuts them to 9:16 with captions and a hook, and writes a post for each platform.",
     questions: [
       ["How do I clip a YouTube video?",
-        "Paste the video's link and choose how many clips you want, or let YT-Clipper decide (about one for every six minutes). Your clips are ready to review when processing finishes."],
+        "Paste the video's link and choose how many clips you want, or let YT-Clipper decide (about one for every two minutes). Your clips are ready to review when processing finishes."],
       ["Can I choose how long the clips are?",
         "Yes. Clips are 30 to 60 seconds by default, and you can set anything from 5 seconds to 3 minutes."],
       ["Do the clips have a watermark?",

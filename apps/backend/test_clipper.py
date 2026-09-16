@@ -14,6 +14,11 @@ words = [{"word": "a", "start": 0.0, "end": 0.4}, {"word": "b", "start": 0.5, "e
 assert snap(0.7, 1.3, words) == (0.5, 1.6), "mid-word cuts widen to whole words"
 assert snap(0.45, 1.05, words) == (0.5, 1.0), "gap cuts land on the neighbouring word edges"
 assert snap(5, 6, []) == (5, 6), "no word timings -> unchanged"
+sentences = [{"word": "One.", "start": 0.0, "end": 0.4}, {"word": "Two", "start": 0.5, "end": 1.0},
+             {"word": "words.", "start": 1.1, "end": 1.6}, {"word": "Next", "start": 2.0, "end": 2.4},
+             {"word": "one.", "start": 2.5, "end": 2.9}]
+assert snap(0.7, 1.3, sentences) == (0.5, 1.6), "mid-sentence cuts widen to sentence boundaries"
+assert snap(2.1, 2.85, sentences) == (2.0, 2.9), "cuts inside the last sentence widen to its edges"
 
 # pass 1: invalid moments dropped, overlap keeps the higher score, result is chronological
 moment = '{{"start": {}, "end": {}, "score": {}, "reason": "{}"}}'
@@ -42,6 +47,11 @@ content = json.dumps({"clips": [pick(1, "one"), pick(7, "ghost"), pick(1, "dupe"
 clips = parse_picks(content, moments, n=5)
 assert [(c.title, c.start, c.reason) for c in clips] == [("one", 100, "r1"), ("zero", 10, "r0")]
 assert len(parse_picks(content, moments, n=1)) == 1
+# trims: accepted inside the candidate and the length range; ignored when outside either
+trim = lambda start, end: json.dumps({"clips": [pick(0, "t") | {"start": start, "end": end}]})
+assert (parse_picks(trim(15, 45), moments, 5)[0].start, parse_picks(trim(15, 45), moments, 5)[0].end) == (15, 45)
+for start, end in [(5, 45), (15, 55), (35, 45)]:  # before the candidate, past it, too short
+    assert parse_picks(trim(start, end), moments, 5, min_len=30, max_len=60)[0].start == 10, (start, end)
 try:
     parse_picks(json.dumps({"clips": [pick(0, "no posts") | {"posts": {"tiktok": "only one"}}]}), moments, 5)
     raise AssertionError("accepted a pick without every platform's post")
@@ -96,9 +106,11 @@ with tempfile.TemporaryDirectory() as tmp:
         hour = {"language": "en", "words": [], "segments": [{"start": 0, "end": 3600, "text": "x"}]}
         clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, max_clips=4, **engine)
         clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, **engine)
+        hour["segments"][0]["end"] = 1200
+        clipper.run(str(src), Path(tmp) / "out", load_transcript=lambda _: hour, **engine)
     finally:
         clipper.find_clips = real_find
-    assert asked == [4, 10], asked
+    assert asked == [4, 30, 20], "about one clip per minute: an hour -> 30, 20 minutes -> 20 (not 3)"
 
 ass = captions([{"word": "Most", "start": 10.0, "end": 10.3}, {"word": "companies", "start": 10.3, "end": 10.9},
                 {"word": "fail.", "start": 11.0, "end": 11.4}, {"word": "{Why?}", "start": 12.5, "end": 12.9},

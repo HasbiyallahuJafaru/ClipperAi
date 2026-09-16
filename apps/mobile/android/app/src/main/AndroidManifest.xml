@@ -21,6 +21,15 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Google and Apple sign-in happen in the phone's browser and come back through this link -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="xyz.ytclipper.app" android:host="sso-callback" />
+            </intent-filter>
+            <!-- the link above is handled by app_links, not by Flutter's route-based deep linking -->
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="false" />
             <!-- Share a link (YouTube's Share button) or a video from another app to start a project -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

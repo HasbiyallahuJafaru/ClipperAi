@@ -78,7 +78,7 @@ class NewUpload(BaseModel):
 
 class NewProject(BaseModel):
     source: str = Field(description="Public http(s) video URL (e.g. YouTube), or upload:<id> from POST /api/uploads")
-    clips: int | None = Field(None, ge=1, le=30, description="Clips to make; default ~1 per 6 minutes of video")
+    clips: int | None = Field(None, ge=1, le=30, description="Clips to make; default ~1 per 2 minutes of video")
     min_seconds: float = Field(30, ge=5, le=180)
     max_seconds: float = Field(60, ge=5, le=180)
     captions: bool = Field(True, description="Burn captions into the clips; turn off for videos that already have them")

@@ -7,3 +7,9 @@ tmp/
 pgdata/
 .claude/settings.local.json
 graphify-out/
+
+# holds a live payment API secret; the repo is public
+apps/docs/payment-api-integration.md
+
+# design previews: regenerate with `flutter test test/render.dart --update-goldens`
+apps/mobile/test/goldens/

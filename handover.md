@@ -1,8 +1,16 @@
-# Handover: YT-Clipper is deployed; the Flutter app matches the website; next is running the app on a phone
+# Handover: the app is redesigned and signs in through the browser; payments are next
+
+Updated 2026-09-16 (session 7). **This session:** the 3-clip bug (now about one clip per 2 minutes), the app sign-in
+loop (a patched copy of `clerk_auth`), the app redesigned to the user's reference with website parity, and Google/Apple
+sign-in moved out of the web view into the phone's browser. **Next: payments** (ZoomGuru Payment API / Paystack,
+charge in Naira, show USD; the doc is `apps/docs/payment-api-integration.md`, git-ignored because it holds a live key).
+
+Older notes from session 6 follow.
 
 Updated 2026-09-15 (end of session 6). **Pushed to `main`:** `7f92aa8` (rename to YT-Clipper, Railway deploy, Flutter
-app, SEO pages, captions switch). Vercel deployed it. Documentation updates made after that commit (CLAUDE.md,
-handover, README, DESIGN, memory) are **not committed yet**. Commit and push only when the user asks.
+app, SEO pages, captions switch) and `2372f2f` (docs). Vercel deployed it. **Not committed yet:** the APK build fixes
+(`apps/mobile/pubspec.yaml` + `pubspec.lock` pin, `android/gradle.properties` line), `DECISIONS.md` pin note, and this
+final docs update (handover, CLAUDE.md, memory). Run `git status`; commit and push only when the user asks.
 Start the next chat with:
 
 > Read `handover.md` and `.claude/CLAUDE.md` (use `graphify query` for anything else), then continue with the open
@@ -24,7 +32,7 @@ graphify, don't read it end to end). `README.md` = how the product works, API, s
 | SEO | Done: metadata, sitemap, robots, share image, JSON-LD, `/compare/*` (OpusClip, Klap, Vizard, Submagic), `/tools/*` (3 keyword pages), 16-question FAQ, pricing promises. Research in OpenSEO project `YT-Clipper` |
 | Clips | Hook overlay removed; captions switch per project (website + app); caption file always in the download |
 | Progress UX | `progress` % + YouTube `thumbnail` on every project; website + app show the picture filling up and a bar |
-| **Mobile app (Phase 8)** | Feature-complete with the website, 13 tests, launcher icon. **Never run on a device.** Release APK build was running at handover (debug-signed) |
+| **Mobile app (Phase 8)** | Feature-complete with the website, 13 tests, launcher icon. **Release APK built** 2026-09-15: `apps/mobile/build/app/outputs/flutter-apk/app-release.apk` (59 MB, not committed; label YT-Clipper, minSdk 24, points at the Railway API, **debug-signed**). **Never installed or opened on a phone yet** |
 | Billing (Phase 9) | Plans Creator $15 / Pro $39 / Business $99; **payments off**. Price change proposed, not decided |
 | Phase 10 | Railway deploy done early; domain, Clerk production instance, hardening tests still to do |
 
@@ -42,8 +50,10 @@ GitHub: https://github.com/HasbiyallahuJafaru/ClipperAi (**public**), branch `ma
 3. **Buffer per-user connection:** check Buffer → Settings → API for creating an OAuth client. If yes: build a
    "Connect Buffer" button (~1–2 days). If no: per-user API key, or a multi-customer posting API. Until then only
    `BUFFER_OWNERS` can publish (currently empty on Railway, so nobody can publish from the live site).
-4. **Android SDK licences:** `! flutter doctor --android-licenses` (the user accepts them). Then try the APK on a phone:
-   Clerk sign-in (beta SDK, dev instance), playback, share from YouTube, upload.
+4. **Try the APK on a phone** (sideload; allow unknown apps): Clerk sign-in (beta SDK, dev instance; if it fails,
+   enable native applications / "Native API" in the Clerk dashboard), playback, upload, share from YouTube. YouTube
+   links fail until `YTDLP_PROXY` is set; publishing needs the user's Clerk id in `BUFFER_OWNERS` on Railway. Report
+   back what breaks. (Android SDK licences turned out not to block the build.)
 5. **Auto-detect burned-in subtitles?** Asked; not built (the manual switch exists).
 6. **Pricing:** our Pro $39 vs OpusClip Pro $29 / Submagic Pro $39 / Klap $29; the earlier proposal ($12 / $24 / $59 +
    free 60 min) would undercut them. User decides.
@@ -57,7 +67,9 @@ GitHub: https://github.com/HasbiyallahuJafaru/ClipperAi (**public**), branch `ma
 
 ## What's left to build
 
-1. Run the app on a device; fix what breaks. Play Store signing key (`android/key.properties`), store listing.
+1. Fix what breaks on a real phone. Play Store signing key (`android/key.properties`), store listing. Upgrade
+   `receive_sharing_intent` to 1.9+ (and drop the `kotlin.jvm.target.validation.mode` line) once Flutter's Android
+   Gradle plugin supports compileSdk 37.
 2. iOS: build route (Mac or cloud build) and the Share Extension for sharing into the app.
 3. Buffer per-user connection (item 3 above).
 4. Phase 9: per-job cost tracking; payments only when asked (ask about Clerk Billing).
@@ -90,4 +102,8 @@ unknown version (walkthrough.mjs not run this session).
 - **PowerShell variables are case-insensitive** (`$s` overwrites `$S`).
 - Heredocs with apostrophes break in the Bash tool: write the script to a scratchpad file and run it.
 - Flutter can't load `.woff2`: fonts are converted to TTF with fontTools.
+- **APK build:** first run ~12 min (Gradle + SDK downloads), then ~4 min. `receive_sharing_intent` 1.9.0 needs
+  compileSdk 37 (AGP 9.1 max 36) → pinned 1.8.1, whose Java 11 vs Kotlin 21 targets need
+  `kotlin.jvm.target.validation.mode=warning` in `android/gradle.properties`. A background build's "completed" can hide
+  a failed Gradle run: read the log's exit line.
 - Buffer: 100 requests / 15 min, 10 scheduled posts; never post publicly without the user's go-ahead.

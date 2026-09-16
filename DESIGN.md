@@ -47,11 +47,26 @@ Sample clip frames are gradients (`ClipFrame` tones) and sample project text is 
 Swap in frames from a video we have rights to.
 
 ## Mobile app (`apps/mobile`)
-Follows the website (user, 2026-09-15). Tokens are the same hex values as constants in `lib/main.dart` (`ground`,
-`surface`, `ink`, `muted`, `line`, `accent`...) wired into one `ThemeData`: Geist 400/500/600 as static TTFs, pill
-filled/outlined buttons, 16px white cards with a 1px `line` ring, 12px fields with an accent focus ring, pale-blue
-selected states (`secondaryContainer` = accent-soft, never Material's default teal), Clerk's sign-in themed through
-`ClerkThemeExtension`. `Heading` puts key words in Instrument Serif Italic blue like the website's `<em>`; `Logo` redraws
-the mark; the sign-in screen is Clerk's card on the sky photo. Progress: `progressBar` + `ClipLoading` (the source
-video's picture in a 9:16 frame, grey until colour fills from the bottom). Status chips match the website's `chip`
-variants. The launcher icon is the logo mark (generated PNGs). Light only.
+Follows the website's tokens, laid out for a phone (user's reference screenshot, 2026-09-16). Same hex values as
+constants in `lib/main.dart` wired into one `ThemeData`: Geist 400/500/600 as static TTFs, pill buttons (48dp min),
+12px fields, 16px cards, 24px panels and sheets, pale-blue selected states (`secondaryContainer` = accent-soft, never
+Material's default teal). Icons are Phosphor (`phosphor_icons`), the same family as the website.
+
+- **Welcome** (`welcome.dart`): the sky photo full-bleed, the logo on it, a white sheet curving over the bottom with
+  *Continue with Google* (opens the phone's browser) and *Continue with email* (Clerk's card on the next screen).
+- **Shell** (`home.dart`): four places behind a floating white bar with a blue indicator: Projects, Publishing, Plan,
+  Account. Every page opens with `PageTop` (who is signed in, page actions). A page is built the first time it is
+  opened, so unseen tabs cost no requests.
+- **Projects** (`screens.dart`): heading, search, filter chips (All / Working / Ready / Stopped), then a two-column
+  grid of picture tiles: the video's thumbnail, a state badge, a clip-count or percent pill, the site it came from and
+  the date, a white progress bar while it runs.
+- **Project**: state chip and start date, the picture filling up (`ClipLoading`) with the five steps while it works,
+  a summary panel (Approve all, Calendar, Download all) and clip cards: video, chips, title, hook, description,
+  per-platform post tabs with copy, file chips, review buttons, and the clip's posts.
+- **Publishing / Plan / Account** (`account.dart`): Buffer's connection and channels; the plan, this month's meters,
+  every plan and the billing history; the account with Clerk's own profile and workspaces screens. Plans and payment
+  live on the website.
+- Shared pieces in `ui.dart`: `Polling`, `StatusChip`, `ProgressBar`, `Message` (empty, error, finished), `Panel`,
+  `SectionTitle`, `Skeleton`, `RoundButton`. Light only.
+- **Seeing the screens without a phone:** `flutter test test/render.dart --update-goldens` writes every screen to
+  `test/goldens/` with the real fonts and photo (not committed).

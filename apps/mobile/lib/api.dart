@@ -63,6 +63,16 @@ class Api {
     if ((await response).statusCode >= 300) throw ApiError(502, "The upload didn't go through. Try again.");
     return ticket['source'];
   }
+
+  /// Saves a file to [to]: an API path (with the session token) or a signed storage link (the link is the permission).
+  Future<File> download(String path, File to, {bool signedIn = false}) async {
+    final request = http.Request('GET', Uri.parse(path.startsWith('http') ? path : '$base/api$path'));
+    if (signedIn) request.headers['Authorization'] = 'Bearer ${await token()}';
+    final response = await _http.send(request);
+    if (response.statusCode >= 400) throw ApiError(response.statusCode, "That file didn't download. Try again.");
+    await response.stream.pipe(to.openWrite());
+    return to;
+  }
 }
 
 /// FastAPI answers {"detail": "text"}, or {"detail": [{"msg": ...}]} when a field is invalid.
@@ -83,7 +93,14 @@ String sourceLabel(String source) {
   return url.host.replaceFirst('www.', '') + url.path.replaceFirst(RegExp(r'/$'), '') + (url.hasQuery ? '?${url.query}' : '');
 }
 
-String plural(int n, String word) => '$n $word${n == 1 ? '' : 's'}';
+/// A short name for a small card: the site the video came from, or that it was uploaded.
+String sourceName(String source) =>
+    source.startsWith('upload:') ? 'Uploaded video' : Uri.parse(source).host.replaceFirst('www.', '');
+
+String plural(num n, String word) {
+  final count = n is int || n == n.roundToDouble() ? n.round().toString() : '$n';
+  return '$count $word${n == 1 ? '' : 's'}';
+}
 
 /// What a picked video is, for the signed upload link (image_picker often has no mime type on Android).
 String videoType(String path, String? mimeType) =>
@@ -104,3 +121,39 @@ Map<String, Object?> projectSettings(String clips, String shortest, String longe
   if (min > max) throw ApiError(422, 'The shortest clip must not be longer than the longest.');
   return {'clips': count, 'min_seconds': min, 'max_seconds': max, 'captions': captions};
 }
+
+const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+/// A date in the phone's time zone: 16 Sep 2026.
+String day(String iso) {
+  final t = DateTime.parse(iso).toLocal();
+  return '${t.day} ${_months[t.month - 1]} ${t.year}';
+}
+
+/// A date and time: Mon 16 Sep, 08:00.
+String when(String iso) {
+  final t = DateTime.parse(iso).toLocal();
+  return '${weekdays[t.weekday - 1]} ${t.day} ${_months[t.month - 1]}, ${clockOf(t)}';
+}
+
+/// The day and month only: Mon 16 Sep.
+String dayLabel(String iso) {
+  final t = DateTime.parse(iso).toLocal();
+  return '${weekdays[t.weekday - 1]} ${t.day} ${_months[t.month - 1]}';
+}
+
+String clockOf(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+
+/// The time of day of an instant: 08:00.
+String timeLabel(String iso) => clockOf(DateTime.parse(iso).toLocal());
+
+/// Where a clip sits in its video: 12:05.
+String clock(num seconds) => '${seconds ~/ 60}:${(seconds % 60).floor().toString().padLeft(2, '0')}';
+
+/// Video time for a plan's allowance, as the website says it.
+String hours(num minutes) =>
+    minutes < 60 ? plural(minutes.round(), 'minute') : plural((minutes / 6).round() / 10, 'hour');
+
+/// A price: $15.00.
+String money(int cents) => '\$${(cents / 100).toStringAsFixed(2)}';

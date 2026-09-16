@@ -401,7 +401,7 @@ curl -X POST http://127.0.0.1:8000/api/projects \
 | Field | Required | Rules |
 |---|---|---|
 | `source` | yes | A public `http(s)` link, or `upload:<id>` from an upload. Local paths, `localhost` and private network addresses are rejected. |
-| `clips` | no | 1–30. Default: about one per 6 minutes of video. |
+| `clips` | no | 1–30. Default: about one per 2 minutes of video. |
 | `min_seconds`, `max_seconds` | no | 5–180, min ≤ max. Defaults 30 and 60. |
 | `captions` | no | `true` (default) burns captions into the clips; `false` for videos that already have subtitles. The caption file is made either way. |
 

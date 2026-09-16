@@ -1,0 +1,117 @@
+// ignore_for_file:
+
+import 'package:clerk_auth/src/clerk_auth/auth.dart';
+import 'package:clerk_auth/src/clerk_auth/http_service.dart';
+import 'package:clerk_auth/src/clerk_auth/persistor.dart';
+import 'package:clerk_auth/src/clerk_auth/sdk_flags.dart';
+// ignore: deprecated_member_use_from_same_package
+import 'package:clerk_auth/src/models/enums.dart' show SessionTokenPollMode;
+import 'package:meta/meta.dart';
+import 'package:retry/retry.dart';
+
+export 'package:retry/retry.dart' show RetryOptions;
+
+/// Used by [Api] to locate the current user locale preference.
+typedef LocalesLookup = List<String> Function();
+
+/// An object holding all configurable items required for [Auth], with
+/// sensible defaults
+///
+@immutable
+class AuthConfig {
+  /// Construct an [AuthConfig]
+  const AuthConfig({
+    required this.publishableKey,
+    required this.persistor,
+    this.flags = const SdkFlags(),
+    this.sessionTokenPolling = true,
+    this.retryOptions = const RetryOptions(),
+    this.defaultSessionTokenTemplate,
+    // ignore: deprecated_member_use_from_same_package
+    SessionTokenPollMode? sessionTokenPollMode, // deprecated
+    LocalesLookup? localesLookup,
+    bool? isTestMode,
+    String? telemetryEndpoint,
+    Duration? telemetryPeriod,
+    Duration? clientRefreshPeriod,
+    Duration? httpConnectionTimeout,
+    HttpService? httpService,
+  })  : assert(
+          sessionTokenPollMode == null,
+          'sessionTokenPollMode has been deprecated: please use sessionTokenPolling',
+        ),
+        localesLookup = localesLookup ?? Auth.defaultLocalesLookup,
+        isTestMode = isTestMode ?? false,
+        telemetryEndpoint =
+            telemetryEndpoint ?? 'https://clerk-telemetry.com/v1/event',
+        telemetryPeriod =
+            telemetryPeriod ?? const Duration(milliseconds: 29300),
+        clientRefreshPeriod =
+            clientRefreshPeriod ?? const Duration(milliseconds: 9700),
+        httpConnectionTimeout =
+            httpConnectionTimeout ?? const Duration(milliseconds: 500),
+        httpService = httpService ?? const DefaultHttpService();
+
+  /// Key from the Clerk dashboard identifying the auth service account
+  final String publishableKey;
+
+  /// The [Persistor] used for various state storage
+  final Persistor persistor;
+
+  /// Flags used to affect behaviour
+  final SdkFlags flags;
+
+  /// Do we want to regularly poll for a new session token?
+  final bool sessionTokenPolling;
+
+  /// Options for retrying failed requests
+  final RetryOptions retryOptions;
+
+  /// Function to return list of current user's locales for translation
+  final LocalesLookup localesLookup;
+
+  /// Are we in test mode?
+  final bool isTestMode;
+
+  /// The endpoint to hit when sending telemetry data
+  final String telemetryEndpoint;
+
+  /// The duration between sends of telemetry data
+  /// Default is 29300ms: about 30s, but not exactly on the button to
+  /// avoid repeated clashes with other regular tasks
+  ///
+  /// Set to [Duration.zero] to switch off sending telemetry data
+  ///
+  final Duration telemetryPeriod;
+
+  /// The duration between calls to refresh the client object
+  /// Default is 9700ms: about 10s, but not exactly on the button to
+  /// avoid repeated clashes with other regular tasks
+  ///
+  /// Set to [Duration.zero] to switch off client refresh polling
+  ///
+  final Duration clientRefreshPeriod;
+
+  /// The duration to wait for http connectivity to assert itself
+  /// before timing out in a connectivity test
+  ///
+  final Duration httpConnectionTimeout;
+
+  /// The [HttpService] used to communicate with the backend.
+  final HttpService httpService;
+
+  /// Default template for session token retrieval
+  final String? defaultSessionTokenTemplate;
+
+  /// Initialise
+  Future<void> initialize() async {
+    await persistor.initialize();
+    await httpService.initialize();
+  }
+
+  /// Terminate
+  void terminate() {
+    httpService.terminate();
+    persistor.terminate();
+  }
+}

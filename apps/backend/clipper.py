@@ -26,11 +26,20 @@ CHUNK, OVERLAP = 600, 10  # seconds of audio per STT request, plus overlap past 
 PASS1 = """You scan a video transcript for moments that could become standalone short-form clips.
 A good clip makes sense on its own: strong opening, one complete thought, clear payoff.
 Prefer insight, story, strong opinion, surprise, humor and practical advice over mere loudness.
+The first 1-2 seconds decide retention: a moment must open on a strong first line (a claim, question or
+story jump), never mid-sentence filler like "so", "and", "anyway" or a back-reference like "like I said".
 Each moment is {min:g}-{max:g} seconds, starts at a segment start, ends at a segment end, and does not overlap others.
 Return json only, up to {n} moments:
 {{"moments": [{{"start": 734.2, "end": 781.6, "score": 80, "reason": "why it works"}}]}}"""
 
 PASS2 = """You are a senior short-form video editor. From the numbered candidate clips, pick the best {n} and write their copy.
+Each candidate shows a little transcript before and after: use it to judge, never to include.
+Drop any candidate that would not stand alone: one that opens mid-thought or on filler/back-reference ("so",
+"anyway", "like I said"), leans on what comes before or after to make sense, or ends before its payoff lands.
+Prefer clips whose first sentence is a hook strong enough to stop a scroll, and pick a diverse set: skip a
+candidate that makes the same point as one you already picked.
+You may trim a clip's edges to the nearest complete sentence by giving a tighter "start"/"end" (seconds,
+within the candidate's own bounds); omit them to keep the candidate as-is.
 Use only what is actually said in each clip. Write natively per platform: TikTok and Instagram casual with a few hashtags,
 YouTube Shorts a searchable description, LinkedIn a professional takeaway, Facebook conversational, X under 280 characters.
 Return json only, best clip first:
@@ -87,6 +96,8 @@ class Pick(BaseModel):
     description: str
     hashtags: list[str]
     posts: Posts
+    start: float | None = None  # optional trim: must sit inside the candidate
+    end: float | None = None
 
 
 class Picks(BaseModel):
@@ -211,7 +222,7 @@ def ask_json(model: str, system: str, user: str, parse):
     deepseek = OpenAI(base_url="https://api.deepseek.com", api_key=os.environ["DEEPSEEK_API_KEY"], max_retries=5)
     for attempt in range(1, 4):
         r = deepseek.chat.completions.create(
-            model=model, response_format={"type": "json_object"}, max_tokens=16000,
+            model=model, response_format={"type": "json_object"}, max_tokens=64000,  # 30 clips of copy ~12K tokens plus thinking
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}])
         try:
             return parse(r.choices[0].message.content or "{}")
@@ -221,11 +232,11 @@ def ask_json(model: str, system: str, user: str, parse):
 
 
 def parse_moments(content: str, duration: float, min_len: float, max_len: float) -> list[Moment]:
-    """Never trust model output: drop moments outside the video or far off the length range; on overlap keep the
+    """Never trust model output: drop moments outside the video or off the length range; on overlap keep the
     higher score. Returns chronological order."""
     kept = []
     for m in sorted(Moments.model_validate_json(content).moments, key=lambda m: -m.score):
-        if (0 <= m.start < m.end <= duration + 1 and min_len * 0.5 <= m.end - m.start <= max_len * 1.5
+        if (0 <= m.start < m.end <= duration + 1 and min_len * 0.8 <= m.end - m.start <= max_len * 1.2
                 and all(m.end <= k.start or m.start >= k.end for k in kept)):
             kept.append(m)
     if not kept:
@@ -233,36 +244,53 @@ def parse_moments(content: str, duration: float, min_len: float, max_len: float)
     return sorted(kept, key=lambda m: m.start)
 
 
-def parse_picks(content: str, moments: list[Moment], n: int) -> list[Clip]:
-    """Timestamps always come from pass 1; pass 2 may only choose candidate ids and write copy."""
+def parse_picks(content: str, moments: list[Moment], n: int, min_len: float = 0,
+                max_len: float = math.inf) -> list[Clip]:
+    """Timestamps always come from pass 1; pass 2 may only choose candidate ids, optionally trim a clip inside
+    its own bounds (trims outside the length range are ignored), and write copy."""
     clips, used = [], set()
     for p in Picks.model_validate_json(content).clips:
         if 0 <= p.id < len(moments) and p.id not in used:
             used.add(p.id)
             m = moments[p.id]
-            clips.append(Clip(start=m.start, end=m.end, reason=m.reason, **p.model_dump(exclude={"id"})))
+            start, end = m.start, m.end
+            if p.start is not None and p.end is not None and m.start <= p.start < p.end <= m.end \
+                    and min_len * 0.8 <= p.end - p.start <= max_len * 1.2:
+                start, end = p.start, p.end
+            clips.append(Clip(start=start, end=end, reason=m.reason, **p.model_dump(exclude={"id", "start", "end"})))
     if not clips:
         raise ValueError("no valid candidate ids")
     return clips[:n]
 
 
 def find_clips(transcript: dict, n: int, min_len: float, max_len: float) -> list[Clip]:
-    """Two passes: the cheap model scans the whole transcript for ~3n candidates, the strong model reads only those
-    candidates, picks the best n and writes hooks, titles and per-platform posts."""
+    """Two passes: the cheap model scans the whole transcript for ~3n candidates, the strong model reads those
+    candidates with a little surrounding context, drops the ones that don't stand alone, picks the best diverse
+    set and writes hooks, titles and per-platform posts."""
     segments, words = transcript["segments"], transcript["words"]
     lines = "\n".join(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}" for s in segments)
     moments = ask_json("deepseek-flash", PASS1.format(min=min_len, max=max_len, n=min(3 * n, 90)), lines,
                        lambda c: parse_moments(c, segments[-1]["end"], min_len, max_len))
+    said = lambda a, b: " ".join(w["word"] for w in words if a <= w["start"] < b)
     candidates = "\n\n".join(
-        f"#{i} ({m.end - m.start:.0f}s) {m.reason}\n" + " ".join(w["word"] for w in words if m.start <= w["start"] < m.end)
+        f"#{i} ({m.end - m.start:.0f}s) {m.reason}\n"
+        f"before: {said(m.start - 15, m.start) or '(silence)'}\n"
+        f"{said(m.start, m.end)}\n"
+        f"after: {said(m.end, m.end + 15) or '(silence)'}"
         for i, m in enumerate(moments))
-    return ask_json("deepseek-v4-pro", PASS2.format(n=n), candidates, lambda c: parse_picks(c, moments, n))
+    return ask_json("deepseek-v4-pro", PASS2.format(n=n), candidates,
+                    lambda c: parse_picks(c, moments, n, min_len, max_len))
 
 
 def snap(start: float, end: float, words: list[dict]) -> tuple[float, float]:
-    """Move cut points out of the middle of words: start at a word start, end at a word end."""
-    start = max((w["start"] for w in words if w["start"] <= start + 0.2), default=start)
-    end = min((w["end"] for w in words if w["end"] >= end - 0.2), default=end)
+    """Move cut points to sentence boundaries where one sits within 1.5s, else to whole words: never start a
+    clip mid-sentence or end it between sentences."""
+    sentence_starts = [w["start"] for a, w in zip(words, words[1:]) if a["word"][-1:] in ".?!"]
+    sentence_ends = [w["end"] for w in words if w["word"][-1:] in ".?!"]
+    near = lambda t, edges: min((e for e in edges if abs(e - t) <= 1.5), key=lambda e: abs(e - t), default=None)
+    s, e = near(start, sentence_starts), near(end, sentence_ends)
+    start = s if s is not None else max((w["start"] for w in words if w["start"] <= start + 0.2), default=start)
+    end = e if e is not None else min((w["end"] for w in words if w["end"] >= end - 0.2), default=end)
     return start, end
 
 
@@ -395,7 +423,7 @@ def run(source: str, out: Path, n: int | None = None, min_len: float = 30, max_l
         raise PermanentError("no speech found in the video")
 
     progress("analyzing")
-    n = n or max(3, min(30, round(transcript["segments"][-1]["end"] / 360)))
+    n = n or max(3, min(30, round(transcript["segments"][-1]["end"] / 60)))  # about one clip per minute
     clips = find_clips(transcript, n if max_clips is None else min(n, max_clips), min_len, max_len)
 
     out.mkdir(parents=True, exist_ok=True)
