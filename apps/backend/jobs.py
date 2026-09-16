@@ -408,8 +408,16 @@ def run_job(project: dict):
 
 def work(concurrency: int):
     # ponytail: fixed thread count; size it to CPU/RAM (each job runs one ffmpeg) and per-plan limits later
-    import publishing  # here rather than at the top: publishing imports this module
+    import payments, publishing  # here rather than at the top: publishing imports this module
     db.migrate()
+
+    def reconcile_payments():  # the provider's webhook is best-effort: re-verify stale pending payments ourselves
+        while True:
+            try:
+                payments.reconcile()
+            except Exception:
+                traceback.print_exc()
+            time.sleep(60)
 
     def send_posts():  # the content calendar's queued posts, one at a time (Buffer allows 100 requests per 15 minutes)
         while True:
@@ -442,6 +450,7 @@ def work(concurrency: int):
     for _ in range(concurrency):
         threading.Thread(target=loop, daemon=True).start()
     threading.Thread(target=send_posts, daemon=True).start()
+    threading.Thread(target=reconcile_payments, daemon=True).start()
     print(f"worker running, {concurrency} job(s) at a time", flush=True)
     while True:
         time.sleep(3600)  # main thread stays interruptible (Ctrl+C); jobs cut off mid-way are requeued by claim()

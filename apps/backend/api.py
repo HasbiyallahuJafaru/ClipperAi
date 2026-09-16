@@ -10,6 +10,9 @@ Calendar: POST /api/projects/{id}/calendar/plan (preview) -> POST /api/projects/
 worker hands them to Buffer) -> GET .../publications for their status.
 Plan limits answer 402 and publishing problems 409/422/502, with a message people can read."""
 import os
+import json
+import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
@@ -18,11 +21,13 @@ from clerk_backend_api.security import authenticate_request
 from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+import redis
 
 import billing
 import clipper
 import db
 import jobs
+import payments
 import publishing
 
 clipper.load_env()
@@ -39,10 +44,49 @@ def signed_in(request: Request) -> str:
     # authorized_parties check would reject the app, so the site is checked here.
     if not state.is_signed_in or state.payload.get("azp", sites[0]) not in sites:
         raise HTTPException(401, "Sign in to continue.")
-    return state.payload.get("org_id") or state.payload["sub"]
+    owner = state.payload.get("org_id") or state.payload["sub"]
+    gentle(owner)
+    return owner
 
 
 Owner = Annotated[str, Depends(signed_in)]
+
+# In-memory fixed-window rate limiting. Exact when one process serves all traffic; on Railway, Redis (REDIS_URL,
+# the plugin's own variable) counts across instances and restarts instead, with the dict as the fallback if Redis
+# is briefly down. The windows to tighten are the ones that cost money (uploads, projects, checkout) and the
+# public payment webhook.
+_redis = redis.Redis.from_url(url, socket_timeout=2) if (url := os.environ.get("REDIS_URL")) else None
+_buckets: dict[str, tuple[float, int]] = {}
+_bucket_lock = threading.Lock()
+
+
+def limited(key: str, cap: int, window: float = 60.0) -> bool:
+    """True when `key` has already been used `cap` times in the current window. Call before doing the work."""
+    if _redis is not None:
+        try:
+            name = f"rl:{key}"
+            if (count := _redis.incr(name)) == 1:
+                _redis.expire(name, int(window))
+            return count > cap
+        except redis.RedisError:
+            pass  # Redis briefly unreachable: the in-memory bucket below still limits this process
+    now = time.monotonic()
+    with _bucket_lock:
+        start, count = _buckets.get(key, (now, 0))
+        if now - start >= window:
+            start, count = now, 0
+        _buckets[key] = (start, count + 1)
+        if len(_buckets) > 10_000:  # a sweep now and then: strangers' one-off keys can't grow the dict forever
+            for k, (s, _) in list(_buckets.items()):
+                if now - s >= window:
+                    _buckets.pop(k, None)
+        return count >= cap
+
+
+def gentle(owner: str):
+    """Signed-in users get a wide general cap; the expensive routes add their own tighter one."""
+    if limited(f"owner:{owner}", 240):
+        raise HTTPException(429, "Too many requests. Try again in a minute.")
 
 
 @asynccontextmanager
@@ -79,12 +123,16 @@ def found(project: dict | None) -> dict:
 
 @app.post("/api/uploads", status_code=201)
 def create_upload(owner: Owner, request: jobs.NewUpload):
+    if limited(f"upload:{owner}", 10):
+        raise HTTPException(429, "Too many uploads started. Try again in a minute.")
     billing.check_new_project(owner)  # before the file is sent, not after
     return jobs.create_upload(request)
 
 
 @app.post("/api/projects", status_code=202)
 def create_project(owner: Owner, request: jobs.NewProject):
+    if limited(f"project:{owner}", 10):
+        raise HTTPException(429, "Too many videos started. Try again in a minute.")
     return jobs.create_project(owner, request)
 
 
@@ -167,6 +215,37 @@ def remove_publication(owner: Owner, publication_id: UUID):
 @app.get("/api/billing")
 def billing_summary(owner: Owner):
     return billing.summary(owner)
+
+
+@app.post("/api/billing/checkout", status_code=201)
+def start_checkout(owner: Owner, request: payments.Checkout):
+    if limited(f"checkout:{owner}", 5):
+        raise HTTPException(429, "Too many payment attempts. Try again in a minute.")
+    return payments.checkout(owner, request.email, request.plan)
+
+
+@app.get("/api/billing/payments/{reference}")
+def payment_status(owner: Owner, reference: str):
+    with db.connect() as c:
+        payment = c.execute("select * from payments where reference = %s and owner = %s",
+                            (reference, owner)).fetchone()
+    if payment is None:
+        raise HTTPException(404, "payment not found")
+    return payment
+
+
+@app.post("/api/payments/callback")
+async def payment_callback(request: Request):
+    """The provider's signed webhook. Only the signature and the once-per-reference apply() are trusted; the body's
+    own claims never are (a verify is available in payments.reconcile()). Always answers 200 fast so the provider
+    doesn't retry a payment that was already applied."""
+    raw = await request.body()
+    if limited(f"webhook:{request.client.host if request.client else 'unknown'}", 30):
+        return {"ok": True}  # throttled: nothing was applied, and a 2xx stops pointless retries
+    if not payments.signed(raw, request.headers.get("x-zoomguru-signature", "")):
+        raise HTTPException(401, "bad signature")
+    payments.apply(json.loads(raw)["reference"])
+    return {"ok": True}
 
 
 @app.post("/api/billing/subscribe", status_code=201)

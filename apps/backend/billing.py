@@ -1,8 +1,10 @@
 """Plans, each account's subscription and monthly usage limits. Both channels (website, MCP) go through these checks;
 clients never enforce limits themselves. `owner` is the Clerk organization or user id the request acts for.
 
-Payments are switched off: choosing a plan activates it at once and nothing is charged (`charged_cents` stays 0)."""
+Payments: each purchase buys 30 days through payments.py (ZoomGuru/Paystack); prices are shown in USD and charged
+in Naira. Once a plan's 30 days run out it counts as no plan until the customer pays again."""
 from typing import Literal
+import os
 
 from pydantic import BaseModel
 
@@ -27,7 +29,8 @@ class Subscribe(BaseModel):
 
 def current(owner: str) -> dict | None:
     with db.connect() as c:
-        return c.execute("select * from subscriptions where owner = %s and status = 'active'", (owner,)).fetchone()
+        return c.execute("select * from subscriptions where owner = %s and status = 'active'"
+                         " and (expires_at is null or expires_at > now())", (owner,)).fetchone()
 
 
 def usage(owner: str) -> dict:
@@ -72,8 +75,10 @@ def check_new_project(owner: str):
 
 
 def subscribe(owner: str, plan: str) -> dict:
-    """Start or switch to a plan. It replaces the current plan immediately; choosing the current plan changes nothing."""
-    # ponytail: payments are off; when a provider is chosen, start its hosted checkout here and activate from its webhook
+    """Activate a plan directly — the free path used while payments are off (no PAYMENT_API_KEY) and by tests.
+    With a payment key set, plans only ever activate through payments.apply()."""
+    if os.environ.get("PAYMENT_API_KEY"):
+        raise LimitError("Choose a plan on the pricing page to pay for it.")
     with db.connect() as c, c.transaction():
         active = c.execute("select * from subscriptions where owner = %s and status = 'active' for update",
                            (owner,)).fetchone()
@@ -86,7 +91,7 @@ def subscribe(owner: str, plan: str) -> dict:
 
 
 def cancel(owner: str) -> dict | None:
-    """Ends the plan now (nothing was paid, so there's no period to run out). None if there is no plan."""
+    """Ends the plan now, for good (a paid month doesn't refund; the 30 days are simply given up). None if none."""
     with db.connect() as c:
         return c.execute("update subscriptions set status = 'ended', ended_at = now()"
                          " where owner = %s and status = 'active' returning *", (owner,)).fetchone()

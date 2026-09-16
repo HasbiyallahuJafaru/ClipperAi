@@ -7,5 +7,6 @@ uvicorn==0.53.0
 psycopg[binary]==3.3.5
 boto3==1.43.93
 clerk-backend-api==7.0.0  # verifies Clerk session tokens (accounts)
+redis==6.4.0  # rate limiting across instances when Railway provides REDIS_URL; without it the limiter stays in memory
 tzdata==2026.4  # time zones for the content calendar where the OS has none (Windows, slim Linux images)
 # local dev/tests only: pgserver (Postgres without installing it), moto[server] (fake S3 for test_jobs.py)

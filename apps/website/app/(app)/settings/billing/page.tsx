@@ -56,7 +56,9 @@ export default function BillingPage() {
               <p className="text-sm text-muted">Current plan</p>
               <p className="text-2xl font-semibold tracking-[-0.03em]">{plan.name}</p>
               <p className="mt-0.5 text-muted">
-                {money(subscription.price_cents)} a month, not charged during early access. Started {day(subscription.started_at)}.
+                {money(subscription.price_cents)} for 30 days{subscription.expires_at
+                  ? `, active until ${day(subscription.expires_at)}`
+                  : ", not charged during early access"}. Started {day(subscription.started_at)}.
               </p>
             </div>
           </div>
@@ -68,7 +70,7 @@ export default function BillingPage() {
       ) : (
         <div className="card mt-8 rounded-3xl p-6 sm:p-8">
           <p className="text-xl font-semibold tracking-[-0.02em]">You don&apos;t have a plan yet.</p>
-          <p className="mt-1 text-muted">Choose one to start making clips. It&apos;s free during early access.</p>
+          <p className="mt-1 text-muted">Choose one to start making clips.</p>
           <Link href="/pricing" className="btn btn-primary mt-6">See plans</Link>
         </div>
       )}

@@ -55,6 +55,7 @@ export type Subscription = {
   status: "active" | "ended";
   started_at: string;
   ended_at: string | null;
+  expires_at: string | null; // each payment buys 30 days; null on the free early-access plans
 };
 
 export type Billing = {

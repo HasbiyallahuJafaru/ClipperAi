@@ -201,8 +201,11 @@ class _PlanPageState extends State<PlanPage> with Polling {
                       ]),
                       const SizedBox(height: 12),
                       Text(
-                        '${money(subscription['price_cents'])} a month, not charged during early access. '
-                        'Started ${day(subscription['started_at'])}.',
+                        subscription['expires_at'] == null
+                            ? '${money(subscription['price_cents'])} a month, not charged during early access. '
+                              'Started ${day(subscription['started_at'])}.'
+                            : '${money(subscription['price_cents'])} for 30 days, renews by '
+                              '${day(subscription['expires_at'])}. Pay again on the website to keep making clips.',
                         style: const TextStyle(color: muted, fontSize: 13.5, height: 1.45),
                       ),
                       const SizedBox(height: 16),

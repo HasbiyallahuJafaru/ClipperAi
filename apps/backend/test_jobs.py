@@ -315,6 +315,57 @@ refuses(lambda: billing.allowance(ME), "made clips past the plan", "all 150 clip
 assert billing.cancel(ME)["status"] == "ended" and billing.current(ME) is None and billing.cancel(ME) is None
 refuses(lambda: billing.allowance(ME), "processed without a plan", "Choose a plan")
 
+# payments through a fake Payment API (Paystack underneath): Naira price from the daily rate, 30 days per payment,
+# and a plan only ever activates through payments.apply(), exactly once per reference
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+import fake_payments  # noqa: E402
+import payments  # noqa: E402
+
+pay_api = fake_payments.FakePayments()
+payments.API = pay_api.url
+os.environ["PAYMENT_API_KEY"] = fake_payments.KEY
+with db.connect() as c:  # a fresh rate row, so rate() needs no network
+    c.execute("update fx_rate set rate = 1500, at = now() where id = 1")
+
+quote = payments.checkout(ME, "me@example.com", "pro")
+assert quote["usd_cents"] == 3900 and quote["kobo"] == 5_850_000 and quote["rate"] == 1500, quote  # $39 at ₦1500/$
+assert billing.current(ME) is None, "checkout granted a plan before any money arrived"
+raw, signature = pay_api.callback(quote["reference"])
+assert not payments.signed(raw, signature[:-1] + "0") and payments.signed(raw, signature)
+assert payments.apply(quote["reference"]) and not payments.apply(quote["reference"]), "applied twice"
+subscribed = billing.current(ME)
+assert subscribed["plan"] == "pro" and subscribed["charged_cents"] == 3900
+with db.connect() as c:  # the duplicate apply above changed nothing, and 30 days were granted
+    row = c.execute("select * from payments where reference = %s", (quote["reference"],)).fetchone()
+    active = c.execute("select * from subscriptions where owner = %s and status = 'active'", (ME,)).fetchone()
+    assert row["status"] == "success" and row["applied_at"] is not None
+    assert active["expires_at"] - datetime.now(timezone.utc) > timedelta(days=29)
+
+# expiry: once the 30 days run out there is no plan, like a cancellation
+with db.connect() as c:
+    c.execute("update subscriptions set expires_at = now() - interval '1 day' where owner = %s and status = 'active'",
+              (ME,))
+assert billing.current(ME) is None
+refuses(lambda: billing.allowance(ME), "used an expired plan", "Choose a plan")
+with db.connect() as c:  # reconciliation heals a webhook that never arrived: a stale pending payment, already paid
+    c.execute("update subscriptions set status = 'ended' where owner = %s", (ME,))
+renewal = payments.checkout(ME, "me@example.com", "creator")
+pay_api.pay(renewal["reference"])
+with db.connect() as c:
+    c.execute("update payments set created_at = now() - interval '16 minutes' where reference = %s",
+              (renewal["reference"],))
+payments.reconcile()
+assert billing.current(ME)["plan"] == "creator", "reconciliation didn't apply the paid payment"
+# rate fallback: a stale row stays in use when the live rate can't be fetched
+with db.connect() as c:
+    c.execute("update fx_rate set rate = 1550, at = now() - interval '2 days' where id = 1")
+payments.RATE_API = "http://127.0.0.1:9/unreachable"
+assert payments.rate() == 1550
+# with a payment key set, a plan can no longer be had for free
+refuses(lambda: billing.subscribe(ME, "business"), "free subscribe with payments on", "pricing page")
+del os.environ["PAYMENT_API_KEY"]
+
 # publishing through a fake Buffer (same answers and refusals as the real one)
 import fake_buffer  # noqa: E402
 import publishing  # noqa: E402
@@ -674,6 +725,16 @@ assert owner_for(True, {"sub": "user_a", "azp": "http://localhost:3000"}) == "us
 assert owner_for(True, {"sub": "user_a", "org_id": "org_b"}) == "org_b"  # the app: no azp
 assert owner_for(True, {"sub": "user_a", "azp": "https://evil.example"}) == 401
 assert owner_for(False, {}) == 401
+
+# rate limiting: a key gets its cap per window, other keys are unaffected
+assert not any(api.limited("spam", 2) for _ in range(2)), "blocked before the cap"
+assert api.limited("spam", 2), "didn't block at the cap"
+assert not api.limited("someone-else", 2), "another key shares the bucket"
+
+# with Redis down (production counts there when REDIS_URL is set), the in-memory bucket takes over
+saved, api._redis = api._redis, __import__("redis").Redis.from_url("redis://127.0.0.1:9/", socket_timeout=0.3)
+assert not any(api.limited("fallback", 2) for _ in range(2)) and api.limited("fallback", 2)
+api._redis = saved
 
 s3.stop()
 print("ok")
