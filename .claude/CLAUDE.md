@@ -111,7 +111,11 @@ what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
 - **UI (redesigned 2026-09-15 after the user's "Relink" reference)**: Next.js + TypeScript + Tailwind; modern premium
   SaaS, **light only**: sky photo heroes, white rounded cards on pale grey, one royal blue accent (#2355f5), Geist,
   pill buttons, Phosphor icons. Yellow only inside clip captions. Each nav link is its own page (user, 2026-09-15), the
-  home page is just the hero. Tokens/components: `app/globals.css`, system notes: `DESIGN.md`. Keep human-readable
+  home page carries the hero plus the shared `Steps`, `FeatureGrid`, `PublishingMap` and `CtaBand` sections
+  (user, 2026-09-17: "the landing page is too scanty" — this replaces the 2026-09-15 hero-only home).
+  Publishing copy must say a **Buffer account is required** (`publishing.allowed()` refuses without one).
+  Contact address everywhere is `support@ytclipper.xyz` (user, 2026-09-17: no personal email on the site);
+  **that mailbox still has to exist.** Tokens/components: `app/globals.css`, system notes: `DESIGN.md`. Keep human-readable
   progress messages ("Finding your strongest moments...") and every text `walkthrough.mjs` clicks. **The app follows
   the website's UI** (user, 2026-09-15): same tokens in `apps/mobile/lib/main.dart`, Geist + Instrument Serif TTFs.
 - **Clips (user, 2026-09-15):** no text drawn over the start of a clip (the old black-box "hook" overlay is removed;

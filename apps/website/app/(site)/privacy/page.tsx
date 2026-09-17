@@ -31,7 +31,7 @@ export default function PrivacyPage() {
 
       <Section title="Who we are">
         <p>YT-Clipper turns long videos into short clips (&quot;the service&quot;). For questions or requests about your
-          data, contact <a className="link" href="mailto:jafaruhasbiyallahu@hotmail.com">jafaruhasbiyallahu@hotmail.com</a>.
+          data, contact <a className="link" href="mailto:support@ytclipper.xyz">support@ytclipper.xyz</a>.
           We answer within 30 days.</p>
       </Section>
 

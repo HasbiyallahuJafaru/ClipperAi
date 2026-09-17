@@ -108,7 +108,7 @@ export default function TermsPage() {
       <Section title="Law and contact">
         <p>These terms are governed by the laws of the Federal Republic of Nigeria, and the courts of Nigeria have
           jurisdiction — without taking away any consumer rights your local law grants you that we can&apos;t exclude.
-          Questions, disputes or takedown requests: <a className="link" href="mailto:jafaruhasbiyallahu@hotmail.com">jafaruhasbiyallahu@hotmail.com</a>.
+          Questions, disputes or takedown requests: <a className="link" href="mailto:support@ytclipper.xyz">support@ytclipper.xyz</a>.
           Our privacy policy at <a className="link" href="/privacy">/privacy</a> describes how we handle your data and
           forms part of these terms.</p>
       </Section>

@@ -38,7 +38,7 @@ export function PageHero({ title, children, extra }: { title: React.ReactNode; c
   );
 }
 
-function SectionHeading({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
+export function SectionHeading({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="mx-auto max-w-2xl text-center">
       <h2 className="text-4xl leading-[1.08] font-medium tracking-[-0.035em] sm:text-5xl">{title}</h2>
@@ -191,7 +191,8 @@ export function PublishingMap() {
   return (
     <section className="mt-24 sm:mt-32">
       <SectionHeading title={<>Post to six platforms <em>from one place</em></>}>
-        Connect your accounts in Buffer, then post a clip now or schedule it up to 30 days ahead.
+        Publishing runs through Buffer, so you&apos;ll need a Buffer account. Connect it once on the Integrations page
+        and your clips go out from your own channels — post now, or schedule up to 30 days ahead.
       </SectionHeading>
       <div className="relative mx-auto mt-12 aspect-[1000/380] max-w-4xl min-w-0" aria-hidden="true">
         <svg viewBox="0 0 1000 380" className="absolute inset-0 size-full" fill="none">
@@ -222,7 +223,7 @@ export function PublishingMap() {
         ))}
       </div>
       <ul className="mx-auto mt-12 grid max-w-4xl gap-4 text-[15px] sm:grid-cols-3">
-        {["Each network gets its own post", "Post now or schedule for later", "We never see your passwords"].map((fact) => (
+        {["A Buffer account connects your channels", "Each network gets its own post", "We never see your passwords"].map((fact) => (
           <li key={fact} className="flex items-center justify-center gap-2 font-medium">
             <CheckCircle weight="fill" className="size-5 text-accent" /> {fact}
           </li>

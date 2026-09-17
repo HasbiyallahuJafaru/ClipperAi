@@ -4,10 +4,11 @@ import Link from "next/link";
 import { PLANS } from "../plans";
 import { DESCRIPTION, JsonLd, NAME, SITE } from "../site";
 import { Preview } from "./preview";
-import { Sky } from "./sections";
+import { CtaBand, FeatureGrid, PublishingMap, SectionHeading, Steps, Sky } from "./sections";
 
 export default function Home() {
   return (
+    <>
     <section className="relative isolate -mt-[4.25rem] overflow-hidden px-4 pt-[4.25rem] pb-24 sm:px-6 sm:pb-32">
       <JsonLd data={[
         { "@context": "https://schema.org", "@type": "Organization", name: NAME, url: SITE, logo: `${SITE}/icon.svg` },
@@ -40,6 +41,23 @@ export default function Home() {
       <Reveal delay={0.1} className="mx-auto mt-16 max-w-5xl sm:mt-20">
         <Preview />
       </Reveal>
+      <div className="mx-auto mt-24 max-w-6xl text-left sm:mt-32">
+        <SectionHeading title={<>One video in, <em>a month of posts out</em></>}>
+          Paste a link or upload a file. YT-Clipper reads the whole transcript, cuts the moments that stand on their
+          own and writes the copy to go with them.
+        </SectionHeading>
+        <div className="mt-12"><Steps /></div>
+        <div className="mt-24 sm:mt-32">
+          <SectionHeading title={<>Everything a clip needs <em>before it goes out</em></>}>
+            Captions, hooks, titles and a post for each platform — all yours to edit, and nothing is published until
+            you approve it.
+          </SectionHeading>
+          <div className="mt-12"><FeatureGrid /></div>
+        </div>
+        <PublishingMap />
+      </div>
     </section>
+    <CtaBand />
+    </>
   );
 }
