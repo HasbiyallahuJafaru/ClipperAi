@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -32,7 +33,7 @@ import jobs  # noqa: E402
 import storage  # noqa: E402
 from jobs import NewProject, NewUpload  # noqa: E402
 
-jobs.fetch_title_async = lambda *_: None  # naming a project from its URL is a live yt-dlp call: not in tests
+real_fetch_title, jobs.fetch_title_async = jobs.fetch_title_async, lambda *_: None  # no live oEmbed in tests
 
 ME, OTHER = "user_test_me", "org_test_other"  # Clerk owners: a signed-in user, and someone else's organization
 
@@ -183,6 +184,30 @@ clipper.run = lambda *a, **kw: fake_run("ok")(*a, **{**kw, "on_meta": None})
 jobs.run_job(jobs.claim())
 assert status(silent)["source_title"] == "t", "an upload with no video title is named by the AI's best clip"
 clipper.run = fake_run("ok")
+
+# a link is named from YouTube's oEmbed answer while it queues, so the page shows the video, not the URL
+link = jobs.create_project(ME, NewProject(source="https://youtu.be/3oCx6HcYz9k?si=x"))
+assert status(link)["source_title"] is None, "a fresh link project has no title yet"
+asked = []
+
+
+def fake_oembed(url, timeout=None):
+    asked.append(url)
+    return io.BytesIO(b'{"title": "Blue Eye Samurai | Official Teaser"}')
+
+
+urllib.request.urlopen, saved = fake_oembed, urllib.request.urlopen
+try:
+    real_fetch_title(link["id"], "https://youtu.be/3oCx6HcYz9k?si=x")
+    for _ in range(50):  # it answers on its own thread
+        if status(link)["source_title"]:
+            break
+        time.sleep(0.1)
+finally:
+    urllib.request.urlopen = saved
+assert status(link)["source_title"] == "Blue Eye Samurai | Official Teaser", status(link)["source_title"]
+assert asked and asked[0].startswith(jobs.OEMBED) and "youtu.be%2F3oCx6HcYz9k" in asked[0], asked
+jobs.delete_project(ME, link["id"])  # keep the project counts below unchanged
 
 assert (done["files_expire_at"] - done["finished_at"]).days == storage.CLIP_DAYS
 with urllib.request.urlopen(clip["video_url"]) as response:  # links save as files; <video> ignores the header

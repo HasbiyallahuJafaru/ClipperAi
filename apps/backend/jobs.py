@@ -17,15 +17,15 @@ import sys
 import threading
 import time
 import traceback
+import urllib.request
 import zipfile
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 from uuid import UUID, uuid4
 
 import openai
-import yt_dlp
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, model_validator
 
@@ -52,6 +52,7 @@ MESSAGES = {
 CONTENT_TYPES = {".mp4": "video/mp4", ".ass": "text/plain; charset=utf-8", ".jpg": "image/jpeg",
                  ".json": "application/json"}
 UPLOAD = re.compile(r"upload:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+OEMBED = "https://www.youtube.com/oembed?"  # public, keyless: a video's title without an API key or yt-dlp
 # retrying these can't succeed: bad input, bad credentials, a request the provider rejects
 PERMANENT = (clipper.PermanentError, openai.AuthenticationError, openai.PermissionDeniedError, openai.BadRequestError)
 
@@ -174,17 +175,19 @@ def discard_upload(source: str):
 
 
 def fetch_title_async(project_id: UUID, url: str):
-    """Name a project after its video while it queues: a metadata-only yt-dlp lookup in the background. The worker
-    lands the same title again when it downloads, so a failure here is silent."""
+    """Name a project after its video while it queues, in the background. YouTube's oEmbed endpoint is public,
+    keyless and answers datacenter IPs, unlike the player API yt-dlp calls (which bot-checks us from Railway), so
+    the name shows up even when the download itself is later blocked. Anything it doesn't know (a non-YouTube
+    link, a private video) answers 404 and the project keeps its URL until the worker reports the real title."""
     def work():
         try:
-            opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "js_runtimes": {"deno": {}, "node": {}}}
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-            if info.get("title"):
+            query = urlencode({"url": url, "format": "json"})
+            with urllib.request.urlopen(OEMBED + query, timeout=10) as response:
+                title = json.load(response).get("title")
+            if title:
                 with db.connect() as c:
                     c.execute("update projects set source_title = %s where id = %s and source_title is null",
-                              (info["title"], project_id))
+                              (title, project_id))
         except Exception:
             pass  # cosmetic; the worker still names it during processing
     threading.Thread(target=work, daemon=True).start()
