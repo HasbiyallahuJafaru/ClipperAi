@@ -88,7 +88,8 @@ export function Steps() {
           <span className="grid size-9 place-items-center rounded-full bg-accent text-white"><ArrowRight weight="bold" className="size-4 -rotate-45" /></span>
           Writes and schedules posts
         </h2>
-        <p className="mt-3 text-muted">A post for each platform, then your approved clips spread over the days and times you pick.</p>
+        <p className="mt-3 text-muted">A post for each platform, then your approved clips posted automatically
+          through your own Buffer account — spread over the days and times you pick. We never see your passwords.</p>
         <div className="mt-6 grid flex-1 grid-cols-5 content-start gap-1.5 rounded-2xl bg-ground p-3 text-center text-[12px]" aria-hidden="true">
           {([["Mon", [TiktokLogo, YoutubeLogo]], ["Tue", []], ["Wed", [InstagramLogo]], ["Thu", [LinkedinLogo, XLogo]], ["Fri", [TiktokLogo]]] as const).map(([day, icons]) => (
             <div key={day} className="grid content-start gap-1.5">

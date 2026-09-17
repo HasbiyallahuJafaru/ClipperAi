@@ -262,12 +262,21 @@ assert again["id"] == p["id"] and again["attempts"] == 2
 assert jobs.delete_project(ME, again["id"]) is None and status(again)
 assert jobs.delete_project(ME, first["id"])["id"] == first["id"]
 assert status(first) is None and storage.size(f"projects/{first['id']}/clip01.mp4") is None
-with db.connect() as c:
-    assert c.execute("select count(*) from clips where project_id = %s", (first["id"],)).fetchone()["count"] == 0
+with db.connect() as c:  # the row and its clip stay: usage keeps counting a deleted project's hours and clips
+    assert c.execute("select count(*) from clips where project_id = %s", (first["id"],)).fetchone()["count"] == 1
 assert jobs.delete_project(ME, first["id"]) is None
 source = upload()
 p = jobs.create_project(ME, NewProject(source=source))
 assert jobs.delete_project(ME, p["id"]) and not upload_exists(source), "deleting a queued project drops its upload"
+
+# quota exploit guard: deleting a completed project must not refund its used hours, videos or clips
+source = upload()
+p = jobs.create_project(ME, NewProject(source=source))
+clipper.run = fake_run("ok")
+jobs.run_job(jobs.claim())
+before = billing.usage(ME)
+assert jobs.delete_project(ME, p["id"])["id"] == p["id"]
+assert billing.usage(ME) == before, "deleting a project refunded its usage"
 
 # transcript cache round-trip
 jobs.save_transcript("Youtube-x", {"language": "en", "segments": [], "words": []})

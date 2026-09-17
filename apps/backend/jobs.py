@@ -184,7 +184,8 @@ def create_project(owner: str, request: NewProject) -> dict:
 
 def get_project(owner: str, project_id: UUID) -> dict | None:
     with db.connect() as c:
-        project = c.execute("select * from projects where id = %s and owner = %s", (project_id, owner)).fetchone()
+        project = c.execute("select * from projects where id = %s and owner = %s and deleted_at is null",
+                            (project_id, owner)).fetchone()
         clips = project and c.execute("select * from clips where project_id = %s order by idx", (project_id,)).fetchall()
     return project and present(project, clips)
 
@@ -193,7 +194,7 @@ def list_projects(owner: str, limit: int = 50) -> list[dict]:
     with db.connect() as c:
         return [present(p) for p in c.execute("""
             select p.*, (select count(*) from clips where project_id = p.id) as clip_count
-            from projects p where owner = %s order by created_at desc limit %s""", (owner, limit))]
+            from projects p where owner = %s and deleted_at is null order by created_at desc limit %s""", (owner, limit))]
 
 
 def cancel_project(owner: str, project_id: UUID) -> dict | None:
@@ -211,13 +212,17 @@ def cancel_project(owner: str, project_id: UUID) -> dict | None:
 
 
 def delete_project(owner: str, project_id: UUID) -> dict | None:
-    """Deletes a project with its clips and files. None if missing, still being processed (cancel it first) or with
-    posts waiting to go out (they'd still go out, with no way left to follow or unschedule them: unschedule first)."""
+    """Soft-deletes a project: the row stays (so this month's used hours and clips keep counting — deleting must
+    never refund quota), but it disappears from the app and its files are removed. None if missing, still being
+    processed (cancel it first) or with posts waiting to go out (unschedule first: they'd go out unwatched)."""
     with db.connect() as c:
-        project = c.execute("""delete from projects where id = %s and owner = %s and status <> all(%s) and not exists (
+        project = c.execute("""update projects set deleted_at = now() where id = %s and owner = %s
+                                   and deleted_at is null and status <> all(%s) and not exists (
                                    select 1 from publications where project_id = projects.id
                                        and status not in ('sent', 'error'))
                                returning *""", (project_id, owner, RUNNING)).fetchone()
+        if project:
+            c.execute("delete from publications where project_id = %s", (project_id,))  # sent/failed history of a hidden project
     if project:  # row first: if storage fails now, the bucket lifecycle rules still remove the files
         storage.delete_prefix(f"projects/{project_id}/")
         discard_upload(project["source"])
@@ -230,7 +235,8 @@ def update_clip(owner: str, project_id: UUID, idx: int, edit: ClipEdit) -> dict 
         return c.execute("""
             update clips set review = coalesce(%s, review), title = coalesce(%s, title), hook = coalesce(%s, hook),
                 description = coalesce(%s, description), hashtags = coalesce(%s, hashtags), posts = coalesce(%s, posts)
-            where project_id = %s and idx = %s and project_id in (select id from projects where owner = %s)
+            where project_id = %s and idx = %s and project_id in
+                  (select id from projects where owner = %s and deleted_at is null)
             returning *""",
                          (edit.review, edit.title, edit.hook, edit.description,
                           None if edit.hashtags is None else Jsonb(edit.hashtags),
@@ -331,7 +337,7 @@ def claim() -> dict | None:
         return c.execute("""
             update projects set status = 'downloading', detail = '', attempts = attempts + 1,
                 heartbeat_at = now(), updated_at = now()
-            where id = (select id from projects where status = 'queued' and run_after <= now()
+            where id = (select id from projects where status = 'queued' and deleted_at is null and run_after <= now()
                         order by created_at for update skip locked limit 1)
             returning *""").fetchone()
 
