@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import openai
+import yt_dlp
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, model_validator
 
@@ -172,14 +173,34 @@ def discard_upload(source: str):
         storage.delete_prefix(f"uploads/{upload[1]}")
 
 
+def fetch_title_async(project_id: UUID, url: str):
+    """Name a project after its video while it queues: a metadata-only yt-dlp lookup in the background. The worker
+    lands the same title again when it downloads, so a failure here is silent."""
+    def work():
+        try:
+            opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "js_runtimes": {"deno": {}, "node": {}}}
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if info.get("title"):
+                with db.connect() as c:
+                    c.execute("update projects set source_title = %s where id = %s and source_title is null",
+                              (info["title"], project_id))
+        except Exception:
+            pass  # cosmetic; the worker still names it during processing
+    threading.Thread(target=work, daemon=True).start()
+
+
 def create_project(owner: str, request: NewProject) -> dict:
     """Queues a project. Raises billing.LimitError if the plan doesn't allow another one this month."""
     billing.check_new_project(owner)
     options = {"n": request.clips, "min_len": request.min_seconds, "max_len": request.max_seconds,
                "captions": request.captions, "orientation": request.orientation}
     with db.connect() as c:
-        return present(c.execute("insert into projects (owner, source, options) values (%s, %s, %s) returning *",
-                                 (owner, request.source, Jsonb(options))).fetchone())
+        project = present(c.execute("insert into projects (owner, source, options) values (%s, %s, %s) returning *",
+                                    (owner, request.source, Jsonb(options))).fetchone())
+    if not UPLOAD.fullmatch(request.source):
+        fetch_title_async(project["id"], request.source)  # show the video's name, not its URL
+    return project
 
 
 def get_project(owner: str, project_id: UUID) -> dict | None:
@@ -394,8 +415,12 @@ def run_job(project: dict):
                              values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                           (pid, i, clip.start, clip.end, clip.score, clip.reason, clip.hook, clip.title,
                            clip.description, Jsonb(clip.hashtags), Jsonb(clip.posts.model_dump())))
+            # uploads have no video title to show: the AI's best clip title names the project instead
+            ai_name = (clips[0].title if clips and clips[0].title else None) \
+                if project["source"].startswith("upload:") and not project.get("source_title") else None
             c.execute("update projects set status = 'completed', detail = '', error = null, source_key = %s,"
-                      " finished_at = now(), updated_at = now() where id = %s", (key, pid))
+                      " source_title = coalesce(source_title, %s), finished_at = now(), updated_at = now()"
+                      " where id = %s", (key, ai_name, pid))
     except Cancelled:
         with db.connect() as c:
             c.execute("update projects set status = 'cancelled', detail = '', finished_at = now(), updated_at = now()"

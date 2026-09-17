@@ -32,6 +32,8 @@ import jobs  # noqa: E402
 import storage  # noqa: E402
 from jobs import NewProject, NewUpload  # noqa: E402
 
+jobs.fetch_title_async = lambda *_: None  # naming a project from its URL is a live yt-dlp call: not in tests
+
 ME, OTHER = "user_test_me", "org_test_other"  # Clerk owners: a signed-in user, and someone else's organization
 
 
@@ -173,6 +175,15 @@ assert http("GET", clip["captions_url"]) == b"clip ass" and http("GET", clip["th
 assert storage.size(f"projects/{p['id']}/clips.json") is not None
 assert not (jobs.TMP / str(p["id"])).exists(), "local scratch must be deleted"
 assert not upload_exists(source), "the uploaded source video must be deleted after processing"
+
+# an upload never reports a video title, so the AI's best clip title names the project
+src = upload()
+silent = jobs.create_project(ME, NewProject(source=src, clips=3))
+clipper.run = lambda *a, **kw: fake_run("ok")(*a, **{**kw, "on_meta": None})
+jobs.run_job(jobs.claim())
+assert status(silent)["source_title"] == "t", "an upload with no video title is named by the AI's best clip"
+clipper.run = fake_run("ok")
+
 assert (done["files_expire_at"] - done["finished_at"]).days == storage.CLIP_DAYS
 with urllib.request.urlopen(clip["video_url"]) as response:  # links save as files; <video> ignores the header
     assert response.headers["Content-Disposition"] == 'attachment; filename="clip01.mp4"'
@@ -306,7 +317,7 @@ assert billing.usage(ME) == {"videos": 2, "minutes": 120, "clips": 0}, billing.u
 
 # limits: Creator = 5 videos, 5 hours, 50 clips
 billing.subscribe(ME, "creator")
-assert billing.allowance(ME) == {"videos": 3, "seconds": 3 * 3600, "clips": 50}
+assert {k: v for k, v in billing.allowance(ME).items() if k != "plan"} == {"videos": 3, "seconds": 3 * 3600, "clips": 50}
 for _ in range(3):
     queued = add_project("queued")
 refuses(lambda: jobs.create_project(ME, NewProject(source="https://example.com/video")), "started a 6th video",

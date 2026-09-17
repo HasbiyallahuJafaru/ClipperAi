@@ -120,6 +120,17 @@ what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
 - **SEO pages must stay true:** `compare/data.ts`, `tools/data.ts` and the FAQ only state what the product does today;
   competitor facts are dated with sources. Re-check them when the product or prices change. OpenSEO project
   `YT-Clipper` holds competitors, positioning and the research log.
+- **Free YouTube downloader (built 2026-09-17, user: a traffic tool for signed-out visitors).** Page
+  `/tools/youtube-downloader` (`apps/website/app/(site)/tools/downloader.tsx` + `youtube-downloader/page.tsx`),
+  linked from the nav, footer, sitemap and the home hero. Backend `apps/backend/downloader.py`: `resolve()` fetches
+  the best stream up to 720p once (ffmpeg remux, no re-encode; videos > 30 min refused) into a temp file served
+  through the backend and deleted after one send; nothing touches billing/usage/allowance. YouTube serves no
+  single-stream MP4s and locks media URLs to the fetching IP, so the server must proxy the bytes. **No proxy
+  support (user, 2026-09-17):** fetches go out from the server's own IP, so this works on this PC but can draw a
+  YouTube bot-check in the cloud, where the visitor is told to try again in a few minutes. Test locally without
+  Postgres/Clerk/S3:
+  `dev_downloader.py` serves just the downloader routes (`uvicorn dev_downloader:app --port 8000`); website
+  `.env.local` already points `BACKEND_URL` at 127.0.0.1:8000.
 
 ## Security rules
 - **Push/deploy only on explicit request (user, 2026-09-16):** commit locally when work is done, but never `git push`,
@@ -133,7 +144,11 @@ what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
 - Every API route requires a verified Clerk session token (`api.signed_in`) and acts for its owner: the active Clerk
   organization id, else the user id. Every service function takes `owner` and filters by it; never add a query that
   reads or changes projects, plans or posts without it (test_jobs.py checks another account sees nothing). The mobile
-  app is never anonymous.
+  app is never anonymous. **Sole exception — the free downloader (2026-09-17)**: `POST/GET /api/tools/download` in
+  `api.py` is public (traffic tool, no plan, no usage); it only touches YouTube via `downloader.py`, is rate-limited
+  per IP, restricted to youtube.com/youtu.be URLs, and has its own unauthenticated website proxy
+  (`apps/website/app/api/tools/download/route.ts`) that skips Clerk on purpose. Never let it grow access to
+  owner-scoped data.
 - **Licensing**: no GPL/AGPL code in the product without explicit evaluation (e.g. Ultralytics YOLO and Postiz are
   AGPL — avoid). Prefer MIT/Apache/BSD. Every dependency goes in `DECISIONS.md`.
 

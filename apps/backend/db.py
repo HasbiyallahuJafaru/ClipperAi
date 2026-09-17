@@ -42,12 +42,17 @@ def connect() -> psycopg.Connection:
 def migrate():
     """Apply migrations/*.sql in name order, each exactly once. The advisory lock stops API and worker racing."""
     with connect() as db:
+        # the lock belongs to the session, and a pooled session outlives this call: unlock or the next migrate()
+        # on a different pooled connection (the worker process, the second call in a test) waits forever
         db.execute("select pg_advisory_lock(7431)")
-        db.execute("create table if not exists schema_migrations"
-                   " (name text primary key, applied_at timestamptz not null default now())")
-        done = {row["name"] for row in db.execute("select name from schema_migrations")}
-        for path in sorted((HERE / "migrations").glob("*.sql")):
-            if path.name not in done:
-                with db.transaction():
-                    db.execute(path.read_text(encoding="utf-8"))
-                    db.execute("insert into schema_migrations (name) values (%s)", (path.name,))
+        try:
+            db.execute("create table if not exists schema_migrations"
+                       " (name text primary key, applied_at timestamptz not null default now())")
+            done = {row["name"] for row in db.execute("select name from schema_migrations")}
+            for path in sorted((HERE / "migrations").glob("*.sql")):
+                if path.name not in done:
+                    with db.transaction():
+                        db.execute(path.read_text(encoding="utf-8"))
+                        db.execute("insert into schema_migrations (name) values (%s)", (path.name,))
+        finally:
+            db.execute("select pg_advisory_unlock(7431)")

@@ -85,4 +85,4 @@ export function ClipLoading({ src, progress, className = "w-36 sm:w-40" }: { src
 }
 
 /** The marketing pages, in the site header and footer. */
-export const PAGES = [["How it works", "/how-it-works"], ["Features", "/features"], ["Pricing", "/pricing"], ["FAQ", "/faq"]];
+export const PAGES = [["How it works", "/how-it-works"], ["Features", "/features"], ["Downloader", "/tools/youtube-downloader"], ["Pricing", "/pricing"], ["FAQ", "/faq"]];

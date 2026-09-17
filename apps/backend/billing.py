@@ -49,15 +49,17 @@ def usage(owner: str) -> dict:
 
 
 def allowance(owner: str) -> dict:
-    """What processing may still use this month: {"videos", "seconds", "clips"} (videos None = no cap).
+    """What processing may still use this month: {"videos", "seconds", "clips", "plan"} (videos None = no cap).
     Raises LimitError without a plan or when the minutes or clips are used up."""
     # ponytail: projects running at the same time don't reserve allowance, so a month can overshoot by one video
     subscription = current(owner)
     if subscription is None:
         raise LimitError("Choose a plan to start making clips.")
-    plan, used = PLANS[subscription["plan"]], usage(owner)
+    plan = PLANS[subscription["plan"]]
+    used = usage(owner)
     left = {"videos": None if plan["videos"] is None else plan["videos"] - used["videos"],
-            "seconds": (plan["minutes"] - used["minutes"]) * 60, "clips": plan["clips"] - used["clips"]}
+            "seconds": (plan["minutes"] - used["minutes"]) * 60, "clips": plan["clips"] - used["clips"],
+            "plan": plan}
     if left["seconds"] <= 0:
         raise LimitError(f"You've used all {plan['minutes'] // 60} hours of video in your {plan['name']} plan this"
                          " month.")
@@ -68,10 +70,9 @@ def allowance(owner: str) -> dict:
 
 def check_new_project(owner: str):
     """Raises LimitError unless the plan allows starting another project this month."""
-    left = allowance(owner)
-    if left["videos"] is not None and left["videos"] <= 0:
-        plan = PLANS[current(owner)["plan"]]
-        raise LimitError(f"You've started all {plan['videos']} videos in your {plan['name']} plan this month.")
+    if (left := allowance(owner))["videos"] is not None and left["videos"] <= 0:
+        raise LimitError(f"You've started all {left['plan']['videos']} videos in your {left['plan']['name']} plan"
+                         " this month.")
 
 
 def subscribe(owner: str, plan: str) -> dict:

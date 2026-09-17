@@ -486,6 +486,31 @@ were verified.
 - **New APK** (`app-release.apk`, 61.2 MB, 2026-09-16): first since the redesign + renewal date; still not run on
   a phone. All checks green: test_jobs (incl. payments), test_clipper, flutter analyze + 21 tests, website build +
   check.mjs.
+- **Free public YouTube downloader + billing fixes + motion (2026-09-17):** new traffic tool for signed-out visitors.
+  Backend `downloader.py` (resolve → 720p mp4 remux into temp, streamed once, >30 min refused) + public routes
+  `POST/GET /api/tools/download` in `api.py` (per-IP rate limits, youtube-only URLs) — the one exception to the
+  every-route-needs-Clerk rule; never give it owner-scoped access. Website: `/tools/youtube-downloader` (client
+  `tools/downloader.tsx`, card: thumbnail left / download right on desktop, centered stack on mobile), public proxy
+  `app/api/tools/download/route.ts` (no Clerk), nav/footer/sitemap/home-hero links. framer-motion (`motion` pkg)
+  scroll reveals + hover lifts: `app/reveal.tsx` wraps the landing page and `sections.tsx` Steps/FeatureGrid
+  (col-spans must sit on the `RevealItem` wrapper, not the article — moving them broke the grid once). Billing
+  fixes: `payments.signed()` refuses webhooks when `PAYMENT_API_KEY` unset (empty-key HMAC was forgeable);
+  `billing.allowance()` returns `plan` so `check_new_project` uses one query.
+  **No proxies (user, 2026-09-17):** the `YTDLP_PROXIES` pool (round-robin + bot-check bench) was removed from
+  `downloader.py`, and the `YTDLP_PROXY` lines from `jobs.fetch_title_async`; `clipper.py` keeps its committed
+  `YTDLP_PROXY` branch. Fetches now leave from the server's own IP; a bot-check tells the visitor to retry later.
+  **Fixed 2026-09-17 — `db.migrate()` deadlocked (this was the real bug behind "the tests hang"):**
+  `pg_advisory_lock(7431)` is session-level, and since pooling (16d7143) the session goes back to the pool still
+  holding it, so the next `migrate()` on a *different* pooled connection waits forever — the second `db.migrate()`
+  in `test_jobs.py` hung (a coin flip over which connection it got), and in production whichever of api/worker
+  booted first would have blocked the other at startup. `db.py` now unlocks in a `finally`.
+  **Verified 2026-09-17:** `test_jobs.py` ok (16s, was hanging), `test_clipper.py` ok, and a real
+  youtube.com fetch through the rewritten `downloader._work` (744412 bytes served, temp dir deleted).
+  `test_jobs.py` stubs `jobs.fetch_title_async` so the suite makes no yt-dlp calls.
+  Gotcha: yt-dlp trusts **certifi's** bundle and ignores `SSL_CERT_FILE`, so on this PC (Avast TLS interception)
+  every yt-dlp call fails; unrelated to the code.
+  **Not live:** needs a deploy; `check.mjs` and `walkthrough.mjs` not re-run (local backend was the scratch
+  `dev_downloader.py`, not `dev.py`).
 
 ## Left
 

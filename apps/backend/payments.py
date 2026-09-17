@@ -94,7 +94,10 @@ def checkout(owner: str, email: str, plan: str) -> dict:
 
 
 def signed(raw: bytes, header: str) -> bool:
-    expected = hmac.new(os.environ.get("PAYMENT_API_KEY", "").encode(), raw, hashlib.sha512).hexdigest()
+    key = os.environ.get("PAYMENT_API_KEY", "")
+    if not key:
+        return False  # no key configured: an empty-key HMAC is computable by anyone, so trust no webhook
+    expected = hmac.new(key.encode(), raw, hashlib.sha512).hexdigest()
     return hmac.compare_digest(expected, header)
 
 
@@ -113,6 +116,7 @@ def apply(reference: str) -> bool:
         c.execute("update subscriptions set status = 'ended', ended_at = now()"
                   " where owner = %s and status = 'active'", (paid["owner"],))
         c.execute("insert into subscriptions (owner, plan, price_cents, charged_cents, expires_at)"
+                  # charged_cents is USD cents like the plan price; the actual NGN kobo charge is payments.kobo
                   " values (%s, %s, %s, %s, greatest(now(), coalesce(%s, now())) + interval '30 days')",
                   (paid["owner"], paid["plan"], paid["usd_cents"], paid["usd_cents"], until))
         return True

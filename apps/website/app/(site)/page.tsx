@@ -1,4 +1,6 @@
 import { NewProject } from "../new-project";
+import { Reveal } from "../reveal";
+import Link from "next/link";
 import { PLANS } from "../plans";
 import { DESCRIPTION, JsonLd, NAME, SITE } from "../site";
 import { Preview } from "./preview";
@@ -19,19 +21,25 @@ export default function Home() {
       ]} />
       <Sky />
       <div className="mx-auto max-w-6xl pt-14 text-center sm:pt-20">
-        <h1 className="mx-auto max-w-4xl text-[2.75rem] leading-[1.02] font-medium tracking-[-0.04em] sm:text-6xl lg:text-7xl">
+        <Reveal><h1 className="mx-auto max-w-4xl text-[2.75rem] leading-[1.02] font-medium tracking-[-0.04em] sm:text-6xl lg:text-7xl">
           Turn one video into <em>a month of content</em>
-        </h1>
-        <p className="mx-auto mt-6 max-w-xl text-lg text-[#2c3650] sm:text-xl">
+        </h1></Reveal>
+        <Reveal delay={0.12}><p className="mx-auto mt-6 max-w-xl text-lg text-[#2c3650] sm:text-xl">
           Paste a link or upload a video. Get captioned vertical clips, posts for every platform and a posting calendar.
-        </p>
-        <div className="mx-auto mt-9 max-w-2xl">
+        </p></Reveal>
+        <Reveal delay={0.24}><div className="mx-auto mt-9 max-w-2xl">
           <NewProject />
-        </div>
+        </div></Reveal>
+        <Reveal delay={0.32}><p className="mt-5 text-[15px] text-[#2c3650]">
+          Just want the video?{" "}
+          <Link href="/tools/youtube-downloader" className="font-medium text-accent-ink underline underline-offset-2">
+            Use the free YouTube downloader
+          </Link> — no sign-up, no plan needed.
+        </p></Reveal>
       </div>
-      <div className="rise mx-auto mt-16 max-w-5xl sm:mt-20" style={{ "--delay": "120ms" } as React.CSSProperties}>
+      <Reveal delay={0.1} className="mx-auto mt-16 max-w-5xl sm:mt-20">
         <Preview />
-      </div>
+      </Reveal>
     </section>
   );
 }

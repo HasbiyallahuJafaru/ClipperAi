@@ -5,6 +5,7 @@ import {
 } from "@phosphor-icons/react/ssr";
 import Image from "next/image";
 import Link from "next/link";
+import { Reveal, RevealGroup, RevealItem, HoverLift } from "../reveal";
 import { ClipFrame } from "../ui";
 import sky from "./sky.jpg";
 
@@ -48,8 +49,8 @@ function SectionHeading({ title, children }: { title: React.ReactNode; children:
 
 export function Steps() {
   return (
-    <div className="grid gap-5 lg:grid-cols-[1fr_1.15fr_1fr]">
-      <article className="card flex flex-col rounded-3xl p-6">
+    <RevealGroup className="grid gap-5 lg:grid-cols-[1fr_1.15fr_1fr]">
+      <RevealItem className="flex"><article className="card flex w-full flex-col rounded-3xl p-6">
         <h2 className="flex items-center gap-3 text-lg font-semibold tracking-[-0.02em]">
           <span className="grid size-9 place-items-center rounded-full bg-accent text-white"><Sparkle weight="fill" className="size-4" /></span>
           Finds the moments
@@ -66,9 +67,9 @@ export function Steps() {
           </div>
           <p>And that is how the first hundred customers came in, one thread at a time.</p>
         </div>
-      </article>
+      </article></RevealItem>
 
-      <article className="flex flex-col rounded-3xl bg-accent p-6 text-white shadow-float">
+      <RevealItem className="flex"><article className="flex w-full flex-col rounded-3xl bg-accent p-6 text-white shadow-float">
         <h2 className="flex items-center gap-3 text-lg font-semibold tracking-[-0.02em]">
           <span className="grid size-9 place-items-center rounded-full bg-white text-accent"><Scissors weight="fill" className="size-4" /></span>
           Cuts, frames and captions
@@ -81,9 +82,9 @@ export function Steps() {
             <ClipFrame words={["every", "word", "counts"]} className="!absolute inset-0 !bg-none" />
           </div>
         </div>
-      </article>
+      </article></RevealItem>
 
-      <article className="card flex flex-col rounded-3xl p-6">
+      <RevealItem className="flex"><article className="card flex w-full flex-col rounded-3xl p-6">
         <h2 className="flex items-center gap-3 text-lg font-semibold tracking-[-0.02em]">
           <span className="grid size-9 place-items-center rounded-full bg-accent text-white"><ArrowRight weight="bold" className="size-4 -rotate-45" /></span>
           Writes and schedules posts
@@ -102,23 +103,23 @@ export function Steps() {
             </div>
           ))}
         </div>
-      </article>
-    </div>
+      </article></RevealItem>
+    </RevealGroup>
   );
 }
 
 export function FeatureGrid() {
   return (
-    <div className="grid gap-5 lg:grid-cols-6">
-      <article className="relative overflow-hidden rounded-3xl bg-[linear-gradient(180deg,#e6edff,#f4f7ff)] p-7 lg:col-span-3 lg:row-span-2">
+    <RevealGroup className="grid gap-5 lg:grid-cols-6">
+      <RevealItem className="flex lg:col-span-3 lg:row-span-2"><article className="relative flex w-full flex-col overflow-hidden rounded-3xl bg-[linear-gradient(180deg,#e6edff,#f4f7ff)] p-7">
         <h2 className="text-xl font-semibold tracking-[-0.02em]">Captions that follow every word</h2>
         <p className="mt-2 max-w-md text-muted">A few words at a time with the spoken word highlighted. Turn them off for videos that already have their own.</p>
         <div className="mx-auto mt-8 w-[58%] max-w-64 translate-y-10 rounded-[2.2rem] bg-ink p-2 shadow-float sm:w-[46%]" aria-hidden="true">
           <ClipFrame tone={0} words={["our", "first", "customers"]} className="rounded-[1.7rem]" />
         </div>
-      </article>
+      </article></RevealItem>
 
-      <article className="rounded-3xl bg-surface p-7 shadow-card lg:col-span-3">
+      <RevealItem className="flex lg:col-span-3"><HoverLift className="flex w-full"><article className="w-full rounded-3xl bg-surface p-7 shadow-card">
         <h2 className="text-xl font-semibold tracking-[-0.02em]">A post written for each platform</h2>
         <p className="mt-2 text-muted">Different length, tone and hashtags for each network. Edit any of it before you approve.</p>
         <div className="mt-6 rounded-2xl bg-ground p-4" aria-hidden="true">
@@ -133,9 +134,9 @@ export function FeatureGrid() {
           </p>
           <p className="mt-2 text-[15px] text-accent-ink">#startups #growth #founders</p>
         </div>
-      </article>
+      </article></HoverLift></RevealItem>
 
-      <article className="rounded-3xl bg-surface p-7 shadow-card lg:col-span-3">
+      <RevealItem className="flex lg:col-span-3"><HoverLift className="flex w-full"><article className="w-full rounded-3xl bg-surface p-7 shadow-card">
         <h2 className="text-xl font-semibold tracking-[-0.02em]">Nothing goes out until you approve it</h2>
         <p className="mt-2 text-muted">Keep the clips you like, reject the rest. Only approved clips can be posted or scheduled.</p>
         <div className="mt-6 flex items-center gap-4 rounded-2xl bg-ground p-3" aria-hidden="true">
@@ -149,9 +150,9 @@ export function FeatureGrid() {
             </div>
           </div>
         </div>
-      </article>
+      </article></HoverLift></RevealItem>
 
-      <article className="rounded-3xl bg-ink p-7 text-white lg:col-span-4">
+      <RevealItem className="flex lg:col-span-4"><article className="w-full rounded-3xl bg-ink p-7 text-white">
         <div className="grid gap-8 sm:grid-cols-[1fr_auto] sm:items-end">
           <div>
             <h2 className="text-xl font-semibold tracking-[-0.02em]">Download it all in one file</h2>
@@ -166,9 +167,9 @@ export function FeatureGrid() {
             <li className="flex items-center gap-2 pl-5"><FileCsv weight="fill" className="size-4 text-white/60" /> calendar.csv</li>
           </ul>
         </div>
-      </article>
+      </article></RevealItem>
 
-      <article className="rounded-3xl bg-surface p-7 shadow-card lg:col-span-2">
+      <RevealItem className="flex lg:col-span-2"><HoverLift className="flex w-full"><article className="w-full rounded-3xl bg-surface p-7 shadow-card">
         <h2 className="text-xl font-semibold tracking-[-0.02em]">Many videos at once</h2>
         <p className="mt-2 text-muted">Paste a list of links or drop several files, up to 5 GB each.</p>
         <ul className="mt-6 grid gap-2 text-[13px]" aria-hidden="true">
@@ -180,8 +181,8 @@ export function FeatureGrid() {
             </li>
           ))}
         </ul>
-      </article>
-    </div>
+      </article></HoverLift></RevealItem>
+    </RevealGroup>
   );
 }
 

@@ -11,6 +11,7 @@ worker hands them to Buffer) -> GET .../publications for their status.
 Plan limits answer 402 and publishing problems 409/422/502, with a message people can read."""
 import os
 import json
+import re
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -21,11 +22,13 @@ from clerk_backend_api.security import authenticate_request
 from clerk_backend_api.security.types import AuthenticateRequestOptions
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 import redis
 
 import billing
 import clipper
 import db
+import downloader
 import jobs
 import oauth
 import payments
@@ -290,3 +293,53 @@ def cancel_plan(owner: Owner):
     if subscription := billing.cancel(owner):
         return subscription
     raise HTTPException(409, "there's no plan to cancel")
+
+
+# The free public YouTube downloader: no sign-in, no plan, no usage — a traffic tool for visitors.
+class DownloadRequest(BaseModel):
+    url: str
+
+
+YOUTUBE = re.compile(r"^https://(www\.|m\.)?(youtube\.com/watch\?|youtube\.com/shorts/|youtu\.be/)\S+$")
+
+
+def visitor(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+@app.post("/api/tools/download")
+def tool_resolve(request: Request, body: DownloadRequest):
+    if limited(f"dlookup:{visitor(request)}", 6):
+        raise HTTPException(429, "Too many lookups. Try again in a minute.")
+    if limited(f"dlookup-day:{visitor(request)}", 50, 86400):
+        raise HTTPException(429, "That's a lot of videos for one day. Come back tomorrow.")
+    if not YOUTUBE.match(body.url.strip()):
+        raise HTTPException(422, "Paste a YouTube video link (youtube.com or youtu.be).")
+    try:
+        return downloader.start(body.url.strip())
+    except downloader.Busy:
+        raise HTTPException(503, "The downloader is busy right now. Try again in a minute.") from None
+
+
+@app.get("/api/tools/download/status")
+def tool_status(request: Request, token: str):
+    if limited(f"dlstatus:{visitor(request)}", 120):
+        raise HTTPException(429, "Too many requests. Try again in a minute.")
+    try:
+        return downloader.status(token)
+    except downloader.Expired:
+        raise HTTPException(410, "This download expired. Search for the video again.") from None
+
+
+@app.get("/api/tools/download")
+def tool_stream(request: Request, token: str):
+    if limited(f"dlget:{visitor(request)}", 12):
+        raise HTTPException(429, "Too many downloads. Try again in a minute.")
+    try:
+        title, size, chunks = downloader.open(token)
+    except downloader.Expired:
+        raise HTTPException(410, "This download expired. Search for the video again.") from None
+    name = re.sub(r'[\\/:*?"<>|]+', " ", title).strip() or "video"
+    return StreamingResponse(chunks, media_type="video/mp4",
+                             headers={"Content-Disposition": f'attachment; filename="{name}.mp4"',
+                                      "Content-Length": str(size)})

@@ -4,7 +4,7 @@ import { TOOLS } from "./(site)/tools/data";
 import { SITE } from "./site";
 
 export default function sitemap(): MetadataRoute.Sitemap {
-  const pages = ["", "/how-it-works", "/features", "/pricing", "/faq", "/privacy", "/terms", "/compare",
+  const pages = ["", "/how-it-works", "/features", "/tools/youtube-downloader", "/pricing", "/faq", "/privacy", "/terms", "/compare",
     ...TOOLS.map((t) => `/tools/${t.slug}`), ...COMPETITORS.map((c) => `/compare/${c.slug}`)];
   return pages.map((path) => ({ url: `${SITE}${path}`, changeFrequency: "monthly", priority: path === "" ? 1 : 0.7 }));
 }
