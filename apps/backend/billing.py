@@ -98,8 +98,19 @@ def cancel(owner: str) -> dict | None:
 
 
 def summary(owner: str) -> dict:
+    """One connection for the whole summary instead of three (pool aside, each connect is a round trip)."""
     with db.connect() as c:
         history = c.execute("select * from subscriptions where owner = %s order by started_at desc limit 50",
                             (owner,)).fetchall()
-    return {"plans": [{"id": key, **plan} for key, plan in PLANS.items()], "subscription": current(owner),
-            "usage": usage(owner), "history": history}
+        subscription = c.execute("select * from subscriptions where owner = %s and status = 'active'"
+                                 " and (expires_at is null or expires_at > now())", (owner,)).fetchone()
+        usage = c.execute("""
+            select count(*) filter (where p.status not in ('failed', 'cancelled')) as videos,
+                   coalesce(sum((t.data->'segments'->-1->>'end')::float) filter (where p.status = 'completed'), 0) / 60
+                       as minutes,
+                   (select count(*) from clips join projects q on q.id = clips.project_id
+                        where q.owner = %(owner)s and q.created_at >= date_trunc('month', now())) as clips
+            from projects p left join transcripts t on t.source_key = p.source_key
+            where p.owner = %(owner)s and p.created_at >= date_trunc('month', now())""", {"owner": owner}).fetchone()
+    return {"plans": [{"id": key, **plan} for key, plan in PLANS.items()], "subscription": subscription,
+            "usage": usage, "history": history}

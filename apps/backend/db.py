@@ -7,9 +7,11 @@ from pathlib import Path
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 HERE = Path(__file__).parent
-_starting = threading.Lock()
+_starting = threading.RLock()  # reentrant: connect() holds it while creating the pool and calls url() inside
+_pool = None
 
 
 def url() -> str:
@@ -26,8 +28,15 @@ def _url() -> str:
 
 
 def connect() -> psycopg.Connection:
-    # ponytail: a connection per call; add psycopg_pool when connect time shows up in request latency
-    return psycopg.connect(url(), row_factory=dict_row, autocommit=True)
+    """A pooled connection: the pool (lazily created) saves the TCP + auth round trip per query, which adds up
+    over the several queries a request makes. Connections auto-commit; transactions are explicit (c.transaction())."""
+    global _pool
+    if _pool is None:
+        with _starting:
+            if _pool is None:
+                _pool = ConnectionPool(url(), min_size=1, max_size=8, open=True,
+                                       kwargs={"row_factory": dict_row, "autocommit": True})
+    return _pool.connection()
 
 
 def migrate():

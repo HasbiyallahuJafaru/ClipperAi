@@ -4,7 +4,7 @@ pydantic==2.13.5
 opencv-python-headless==5.0.0.93
 fastapi==0.141.1
 uvicorn==0.53.0
-psycopg[binary]==3.3.5
+psycopg[pool,binary]==3.3.5  # [pool] = psycopg_pool: shared connections instead of one per query
 boto3==1.43.93
 clerk-backend-api==7.0.0  # verifies Clerk session tokens (accounts)
 redis==6.4.0  # rate limiting across instances when Railway provides REDIS_URL; without it the limiter stays in memory
