@@ -504,6 +504,17 @@ were verified.
   holding it, so the next `migrate()` on a *different* pooled connection waits forever — the second `db.migrate()`
   in `test_jobs.py` hung (a coin flip over which connection it got), and in production whichever of api/worker
   booted first would have blocked the other at startup. `db.py` now unlocks in a `finally`.
+  **Project names from oEmbed (2026-09-17):** `jobs.fetch_title_async` asks
+  `https://www.youtube.com/oembed?url=...&format=json` (public, keyless, answers datacenter IPs) instead of
+  yt-dlp, whose player API bot-checks Railway — so the page shows the video's name even when the download is
+  blocked, and project creation no longer spends a yt-dlp session on the production IP. Non-YouTube links 404 and
+  keep the URL. `jobs.py` no longer imports yt_dlp.
+  **YouTube blocks Railway (measured 2026-09-17, api 152.55.184.97 / worker 152.55.184.125, same /24):** all eight
+  player clients (default, tv, web_safari, mweb, android_vr, ios, tv_embedded, web_embedded) get "Sign in to
+  confirm you're not a bot", so it is IP-level and no extractor setting fixes it. `clipper.py`, yt-dlp 2026.08.19
+  and the Dockerfile (node 20) are unchanged from when downloads worked, and no proxy was ever set on Railway:
+  what changed is the yt-dlp traffic the downloader + title lookups newly sent from that IP. **Open decision:** the
+  free downloader shares an egress IP with the paid pipeline, so its traffic burns the IP paying jobs depend on.
   **Verified 2026-09-17:** `test_jobs.py` ok (16s, was hanging), `test_clipper.py` ok, and a real
   youtube.com fetch through the rewritten `downloader._work` (744412 bytes served, temp dir deleted).
   `test_jobs.py` stubs `jobs.fetch_title_async` so the suite makes no yt-dlp calls.
