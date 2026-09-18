@@ -111,6 +111,17 @@ class ClipEdit(BaseModel):
     hashtags: list[str] | None = Field(None, max_length=30)
     posts: clipper.Posts | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def posts_fit(cls, data):
+        """Say so rather than shortening someone's own words: clipper.Posts trims the model's copy, not a person's."""
+        posts = data.get("posts") if isinstance(data, dict) else None
+        for network, limit in clipper.LIMITS.items():
+            text = (posts or {}).get(network)
+            if isinstance(text, str) and len(text) > limit:
+                raise ValueError(f"the {network} post is {len(text)} characters long; {network} allows {limit}")
+        return data
+
 
 class Cancelled(Exception):
     pass

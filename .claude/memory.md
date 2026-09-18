@@ -509,6 +509,13 @@ were verified.
   yt-dlp, whose player API bot-checks Railway — so the page shows the video's name even when the download is
   blocked, and project creation no longer spends a yt-dlp session on the production IP. Non-YouTube links 404 and
   keep the URL. `jobs.py` no longer imports yt_dlp.
+  **Per-network post limits (2026-09-18, from reviewing Postiz — its approach, none of its AGPL code):**
+  `clipper.LIMITS` holds each network's character cap (x 280, linkedin 3000, tiktok/instagram/facebook 2200,
+  youtube 5000) and is the single source: the PASS2 prompt is built from it, `clipper.Posts.trim` cuts model copy
+  to it on a word boundary, and `jobs.ClipEdit.posts_fit` **rejects** an over-long human edit instead of trimming
+  it. Two behaviours on purpose — trimming the model keeps one long post from failing a whole video's job, while
+  silently shortening a person's own words would be data loss. Checks: `test_clipper.py` (trim, word boundary,
+  short fields untouched), `test_jobs.py` (the refusal).
   **Downloader takes many sites (2026-09-18, user):** `api.SITES` + `api.supported()` replace the YouTube-only
   regex — an allowlist of hosts, deliberately not "any public URL", because the route is public and
   unauthenticated and that would make it an open media proxy. `test_jobs.py` asserts the good/bad cases

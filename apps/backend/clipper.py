@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import yt_dlp
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
 HERE = Path(__file__).parent
@@ -41,7 +41,8 @@ candidate that makes the same point as one you already picked.
 You may trim a clip's edges to the nearest complete sentence by giving a tighter "start"/"end" (seconds,
 within the candidate's own bounds); omit them to keep the candidate as-is.
 Use only what is actually said in each clip. Write natively per platform: TikTok and Instagram casual with a few hashtags,
-YouTube Shorts a searchable description, LinkedIn a professional takeaway, Facebook conversational, X under 280 characters.
+YouTube Shorts a searchable description, LinkedIn a professional takeaway, Facebook conversational.
+Never exceed these lengths in characters: {limits}.
 Return json only, best clip first:
 {{"clips": [{{"id": 3, "score": 94, "hook": "on-screen opening line, max 8 words", "title": "short title",
 "description": "1-2 sentence summary", "hashtags": ["#example"],
@@ -82,6 +83,19 @@ class Moments(BaseModel):
     moments: list[Moment]
 
 
+# Longest post each network takes, in characters (checked 2026-09-18). Conservative where a network's cap depends
+# on the surface: we post reels, and a reel's caption is shorter than a page post's.
+LIMITS = {"tiktok": 2200, "instagram": 2200, "youtube": 5000, "linkedin": 3000, "facebook": 2200, "x": 280}
+
+
+def fits(text: str, limit: int) -> str:
+    """Trim to `limit` on a word boundary. The copywriter is told the caps; this is the net under it, because one
+    over-long post must not fail a whole video's job."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-—") or text[:limit]
+
+
 class Posts(BaseModel):
     tiktok: str
     instagram: str
@@ -89,6 +103,12 @@ class Posts(BaseModel):
     linkedin: str
     facebook: str
     x: str
+
+    @model_validator(mode="after")
+    def trim(self):
+        for network, limit in LIMITS.items():
+            setattr(self, network, fits(getattr(self, network), limit))
+        return self
 
 
 class Pick(BaseModel):
@@ -285,7 +305,8 @@ def find_clips(transcript: dict, n: int, min_len: float, max_len: float) -> list
         f"{said(m.start, m.end)}\n"
         f"after: {said(m.end, m.end + 15) or '(silence)'}"
         for i, m in enumerate(moments))
-    return ask_json("deepseek-v4-pro", PASS2.format(n=n), candidates,
+    limits = ", ".join(f"{network} {cap}" for network, cap in LIMITS.items())
+    return ask_json("deepseek-v4-pro", PASS2.format(n=n, limits=limits), candidates,
                     lambda c: parse_picks(c, moments, n, min_len, max_len))
 
 

@@ -226,6 +226,10 @@ assert jobs.update_clip(ME, p["id"], 99, jobs.ClipEdit(review="approved")) is No
 rejects(lambda: jobs.ClipEdit(review="maybe"), "accepted an unknown review state")
 rejects(lambda: jobs.ClipEdit(title=""), "accepted an empty title")
 rejects(lambda: jobs.ClipEdit(posts={"x": "only one platform"}), "accepted incomplete posts")
+# a person's own words are never silently shortened: too long is an error they can see and fix
+rejects(lambda: jobs.ClipEdit(posts={n: ("z" * 500 if n == "x" else "ok") for n in clipper.LIMITS}),
+        "accepted an x post past its limit")
+assert jobs.ClipEdit(posts={n: "ok" for n in clipper.LIMITS}).posts.x == "ok"
 first = p
 assert [x["clip_count"] for x in jobs.list_projects(ME) if x["id"] == p["id"]] == [1]
 

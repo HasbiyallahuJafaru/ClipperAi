@@ -145,6 +145,13 @@ with tempfile.TemporaryDirectory() as tmp:
     assert changed > 1000, f"burned captions must change the picture ({changed} pixels differ)"
     assert len(set(frames[False])) <= 3, "without captions the gray test picture stays plain"
 
+# model copy is trimmed to each network's cap on a word boundary, never rejected: one long post must not fail a job
+long = clipper.Posts(tiktok="a" * 3000, instagram="ok", youtube="y", linkedin="l", facebook="f", x="word " * 200)
+assert len(long.tiktok) == clipper.LIMITS["tiktok"] and long.instagram == "ok", "trimmed the wrong field"
+assert len(long.x) <= clipper.LIMITS["x"] and not long.x.endswith(" "), long.x[-20:]
+assert long.x.split()[-1] == "word", "cut mid-word instead of at a space"
+assert clipper.fits("short", 280) == "short"
+
 # orientation: every choice renders its own crop ratio, pixel size and matching caption play resolution
 with tempfile.TemporaryDirectory() as tmp:
     src = Path(tmp) / "wide.mp4"
