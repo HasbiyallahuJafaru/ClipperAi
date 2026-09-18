@@ -516,6 +516,15 @@ were verified.
   it. Two behaviours on purpose — trimming the model keeps one long post from failing a whole video's job, while
   silently shortening a person's own words would be data loss. Checks: `test_clipper.py` (trim, word boundary,
   short fields untouched), `test_jobs.py` (the refusal).
+  **Project names come from each site's oEmbed (2026-09-18, user: "do this for others too"):** `jobs.OEMBED` maps
+  host -> that site's oEmbed service and `jobs.oembed_endpoint()` picks it (subdomains included); X has no title
+  field so its `author_name` (the account) is used. **Measured from Railway:** YouTube, Dailymotion, TikTok,
+  SoundCloud, Pinterest and X answer with a name; Vimeo answers without one, Reddit is 403, Instagram and Facebook
+  need an app token — those keep showing the URL until the worker downloads the video and `save_title` records the
+  real one. A generic og:title scrape was tried first and rejected: from Railway it returned placeholders
+  ("TikTok - Make Your Day", "Reddit", "Instagram") and YouTube answered 429, so it would have named projects
+  with junk. Check in `test_jobs.py` covers the endpoint per site, the author_name fallback and "no endpoint =
+  no request"; mutation-tested by making every host resolve to YouTube's endpoint.
   **Which sites actually work, measured from the Railway container 2026-09-18** (yt-dlp's own extractor `_TESTS`
   URLs, plus a live X post because its Twitter tests are all dead): **work** — Instagram, X, Reddit, Twitch,
   Pinterest, SoundCloud, archive.org, and Dailymotion once `curl_cffi` is installed; **IP-blocked** — YouTube

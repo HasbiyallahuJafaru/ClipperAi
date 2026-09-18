@@ -185,29 +185,45 @@ jobs.run_job(jobs.claim())
 assert status(silent)["source_title"] == "t", "an upload with no video title is named by the AI's best clip"
 clipper.run = fake_run("ok")
 
-# a link is named from YouTube's oEmbed answer while it queues, so the page shows the video, not the URL
-link = jobs.create_project(ME, NewProject(source="https://youtu.be/3oCx6HcYz9k?si=x"))
-assert status(link)["source_title"] is None, "a fresh link project has no title yet"
-asked = []
+# a link is named from its site's oEmbed answer while it queues, so the page shows the video, not the URL
+asked, answer = [], b'{"title": "Blue Eye Samurai | Official Teaser"}'
 
 
-def fake_oembed(url, timeout=None):
-    asked.append(url)
-    return io.BytesIO(b'{"title": "Blue Eye Samurai | Official Teaser"}')
+def fake_oembed(request, timeout=None):
+    asked.append(request.full_url if hasattr(request, "full_url") else request)
+    return io.BytesIO(answer)
 
 
-urllib.request.urlopen, saved = fake_oembed, urllib.request.urlopen
-try:
-    real_fetch_title(link["id"], "https://youtu.be/3oCx6HcYz9k?si=x")
-    for _ in range(50):  # it answers on its own thread
-        if status(link)["source_title"]:
-            break
-        time.sleep(0.1)
-finally:
-    urllib.request.urlopen = saved
-assert status(link)["source_title"] == "Blue Eye Samurai | Official Teaser", status(link)["source_title"]
-assert asked and asked[0].startswith(jobs.OEMBED) and "youtu.be%2F3oCx6HcYz9k" in asked[0], asked
-jobs.delete_project(ME, link["id"])  # keep the project counts below unchanged
+def named(source, reply):
+    """Run the real lookup against a canned oEmbed reply and give back the title it stored."""
+    global answer
+    answer = reply
+    project = jobs.create_project(ME, NewProject(source=source))
+    assert status(project)["source_title"] is None, "a fresh link project has no title yet"
+    urllib.request.urlopen, saved = fake_oembed, urllib.request.urlopen
+    try:
+        real_fetch_title(project["id"], source)
+        for _ in range(50):  # it answers on its own thread
+            if status(project)["source_title"]:
+                break
+            time.sleep(0.1)
+    finally:
+        urllib.request.urlopen = saved
+    title = status(project)["source_title"]
+    jobs.delete_project(ME, project["id"])  # keep the project counts below unchanged
+    return title
+
+
+assert named("https://youtu.be/3oCx6HcYz9k?si=x", answer) == "Blue Eye Samurai | Official Teaser"
+assert asked[-1].startswith(jobs.OEMBED["youtu.be"]) and "youtu.be%2F3oCx6HcYz9k" in asked[-1], asked[-1]
+# each site has its own endpoint, and X answers with the account rather than a title
+assert named("https://www.tiktok.com/@a/video/7", b'{"title": "a tiktok"}') == "a tiktok"
+assert asked[-1].startswith(jobs.OEMBED["tiktok.com"]), asked[-1]
+assert named("https://x.com/federalreserve/status/7", b'{"author_name": "Federal Reserve"}') == "Federal Reserve"
+# a site we have no endpoint for is left alone: no request at all, and the page keeps showing the URL
+before = len(asked)
+assert named("https://example.com/video.mp4", b'{"title": "never asked"}') is None
+assert len(asked) == before, "asked a site that has no oEmbed endpoint"
 
 assert (done["files_expire_at"] - done["finished_at"]).days == storage.CLIP_DAYS
 with urllib.request.urlopen(clip["video_url"]) as response:  # links save as files; <video> ignores the header

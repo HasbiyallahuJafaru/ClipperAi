@@ -52,7 +52,25 @@ MESSAGES = {
 CONTENT_TYPES = {".mp4": "video/mp4", ".ass": "text/plain; charset=utf-8", ".jpg": "image/jpeg",
                  ".json": "application/json"}
 UPLOAD = re.compile(r"upload:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
-OEMBED = "https://www.youtube.com/oembed?"  # public, keyless: a video's title without an API key or yt-dlp
+# Public, keyless oEmbed endpoints: a link's own name while the project waits, without yt-dlp (heavier, and
+# refused outright from a datacenter by some sites). Measured from Railway 2026-09-18: these answer with a title;
+# Reddit (403), Instagram and Facebook (need an app token) do not, and Vimeo answers without one — those keep
+# showing their URL until the worker downloads the video and reports the real title.
+OEMBED = {"youtube.com": "https://www.youtube.com/oembed", "youtu.be": "https://www.youtube.com/oembed",
+          "dailymotion.com": "https://www.dailymotion.com/services/oembed",
+          "dai.ly": "https://www.dailymotion.com/services/oembed",
+          "tiktok.com": "https://www.tiktok.com/oembed", "soundcloud.com": "https://soundcloud.com/oembed",
+          "x.com": "https://publish.twitter.com/oembed", "twitter.com": "https://publish.twitter.com/oembed",
+          "pinterest.com": "https://www.pinterest.com/oembed.json", "vimeo.com": "https://vimeo.com/api/oembed.json"}
+BROWSER = {"User-Agent": "Mozilla/5.0"}  # a few of them refuse the stdlib's default agent
+
+
+def oembed_endpoint(url: str) -> str | None:
+    """The oEmbed service for this link's host (or a subdomain of it), else None."""
+    host = (urlparse(url).hostname or "").lower()
+    return next((service for site, service in OEMBED.items() if host == site or host.endswith("." + site)), None)
+
+
 # retrying these can't succeed: bad input, bad credentials, a request the provider rejects
 PERMANENT = (clipper.PermanentError, openai.AuthenticationError, openai.PermissionDeniedError, openai.BadRequestError)
 
@@ -186,15 +204,20 @@ def discard_upload(source: str):
 
 
 def fetch_title_async(project_id: UUID, url: str):
-    """Name a project after its video while it queues, in the background. YouTube's oEmbed endpoint is public,
-    keyless and answers datacenter IPs, unlike the player API yt-dlp calls (which bot-checks us from Railway), so
-    the name shows up even when the download itself is later blocked. Anything it doesn't know (a non-YouTube
-    link, a private video) answers 404 and the project keeps its URL until the worker reports the real title."""
+    """Name a project after its video while it queues, in the background. These endpoints are public, keyless and
+    answer datacenter IPs, unlike the player APIs yt-dlp calls (which bot-check us from Railway), so the name shows
+    up even when the download itself is later blocked. A host we have no endpoint for, or an answer without a
+    title, leaves the project showing its URL until the worker reports the real one."""
     def work():
         try:
+            endpoint = oembed_endpoint(url)
+            if endpoint is None:
+                return
             query = urlencode({"url": url, "format": "json"})
-            with urllib.request.urlopen(OEMBED + query, timeout=10) as response:
-                title = json.load(response).get("title")
+            request = urllib.request.Request(f"{endpoint}?{query}", headers=BROWSER)
+            with urllib.request.urlopen(request, timeout=10) as response:
+                answer = json.load(response)
+            title = answer.get("title") or answer.get("author_name")  # X gives the account, not the post
             if title:
                 with db.connect() as c:
                     c.execute("update projects set source_title = %s where id = %s and source_title is null",
