@@ -516,6 +516,15 @@ were verified.
   it. Two behaviours on purpose — trimming the model keeps one long post from failing a whole video's job, while
   silently shortening a person's own words would be data loss. Checks: `test_clipper.py` (trim, word boundary,
   short fields untouched), `test_jobs.py` (the refusal).
+  **Which sites actually work, measured from the Railway container 2026-09-18** (yt-dlp's own extractor `_TESTS`
+  URLs, plus a live X post because its Twitter tests are all dead): **work** — Instagram, X, Reddit, Twitch,
+  Pinterest, SoundCloud, archive.org, and Dailymotion once `curl_cffi` is installed; **IP-blocked** — YouTube
+  ("not a bot") and TikTok ("Your IP address is blocked"); **need a login from any IP** — Facebook ("only
+  available for registered users", 3 URLs) and Vimeo. That is metadata resolution, not a completed download.
+  `curl_cffi` 0.16.3 (MIT) added to requirements: yt-dlp uses it by itself, no code change, and Dailymotion went
+  from "no impersonate target is available" to resolving inside the container. **The site copy still names
+  YouTube, TikTok, Facebook and Vimeo, which do not work in production — fix before deploying** (open question to
+  the user: YouTube is the page's keyword and its URL).
   **Downloader takes many sites (2026-09-18, user):** `api.SITES` + `api.supported()` replace the YouTube-only
   regex — an allowlist of hosts, deliberately not "any public URL", because the route is public and
   unauthenticated and that would make it an open media proxy. `test_jobs.py` asserts the good/bad cases

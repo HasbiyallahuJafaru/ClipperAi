@@ -1,4 +1,5 @@
 yt-dlp  # unpinned on purpose: YouTube changes often and only the latest release keeps up
+curl_cffi==0.16.3  # yt-dlp needs it to impersonate a browser TLS fingerprint; Dailymotion refuses without it
 openai==3.13.0
 pydantic==2.13.5
 opencv-python-headless==5.0.0.93
