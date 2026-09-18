@@ -1,9 +1,9 @@
-"""The free public YouTube downloader (a traffic tool, not part of any plan): paste a link, watch it fetch, download
-an MP4. Nothing here touches subscriptions, usage or allowance — visitors don't even sign in.
+"""The free public video downloader (a traffic tool, not part of any plan): paste a link from any site in
+api.SITES, watch it fetch, download an MP4. Nothing here touches subscriptions, usage or allowance — visitors don't even sign in.
 
 Abuse surface and its guards: per-IP rate limits live in api.py; start() additionally caps concurrent fetches
 (semaphore) and live temp bytes (disk budget) so one visitor can't monopolise the worker or fill the disk; tokens
-are 128-bit unguessable; URLs must be youtube.com/youtu.be.
+are 128-bit unguessable; the caller (api.tool_resolve) only passes links on its allowlist of sites.
 
 YouTube no longer serves single-stream (video+audio) MP4s to anonymous clients, so the fetch remuxes the best file
 up to 720p once (ffmpeg -c copy, no re-encode) into a temp file, which open() then serves until it expires. The
@@ -100,7 +100,7 @@ def _work(token: str, url: str):
         message = str(e)
     except yt_dlp.utils.DownloadError as e:
         blocked = "not a bot" in str(e) or "Sign in to confirm" in str(e)
-        message = ("YouTube is blocking our server right now. Please try again in a few minutes." if blocked
+        message = ("That site is blocking our server right now. Please try again in a few minutes." if blocked
                    else "Couldn't fetch that video. Check the link and try again.")
     except Exception:
         message = "Couldn't fetch that video. Check the link and try again."

@@ -124,7 +124,12 @@ what's pending, new gotchas). Dates are absolute (YYYY-MM-DD).
 - **SEO pages must stay true:** `compare/data.ts`, `tools/data.ts` and the FAQ only state what the product does today;
   competitor facts are dated with sources. Re-check them when the product or prices change. OpenSEO project
   `YT-Clipper` holds competitors, positioning and the research log.
-- **Free YouTube downloader (built 2026-09-17, user: a traffic tool for signed-out visitors).** Page
+- **Free video downloader, multi-site since 2026-09-18 (built 2026-09-17, user: a traffic tool for signed-out
+  visitors).** `api.SITES` is the allowlist of hosts it accepts (YouTube, TikTok, Instagram, X, Facebook, Reddit,
+  Vimeo, Dailymotion, Twitch, Pinterest, SoundCloud, archive.org) and `api.supported()` matches host or subdomain —
+  **never widen this to "any URL"**: the route is public and unauthenticated, so that would make it an open proxy
+  for our bandwidth and IP (test_jobs.py checks `youtube.com.evil.example` is refused). The paid pipeline already
+  took any public link (`jobs.public_url`). Page
   `/tools/youtube-downloader` (`apps/website/app/(site)/tools/downloader.tsx` + `youtube-downloader/page.tsx`),
   linked from the nav, footer, sitemap and the home hero. Backend `apps/backend/downloader.py`: `resolve()` fetches
   the best stream up to 720p once (ffmpeg remux, no re-encode; videos > 30 min refused) into a temp file served

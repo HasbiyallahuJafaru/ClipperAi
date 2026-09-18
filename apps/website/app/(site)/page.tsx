@@ -26,7 +26,8 @@ export default function Home() {
           Turn one video into <em>a month of content</em>
         </h1></Reveal>
         <Reveal delay={0.12}><p className="mx-auto mt-6 max-w-xl text-lg text-[#2c3650] sm:text-xl">
-          Paste a link or upload a video. Get captioned vertical clips, posts for every platform and a posting calendar.
+          Paste a link from YouTube, TikTok, Instagram, X and more — or upload your own file. Get captioned vertical
+          clips, posts for every platform and a posting calendar.
         </p></Reveal>
         <Reveal delay={0.24}><div className="mx-auto mt-9 max-w-2xl">
           <NewProject />
@@ -34,7 +35,7 @@ export default function Home() {
         <Reveal delay={0.32}><p className="mt-5 text-[15px] text-[#2c3650]">
           Just want the video?{" "}
           <Link href="/tools/youtube-downloader" className="font-medium text-accent-ink underline underline-offset-2">
-            Use the free YouTube downloader
+            Use the free video downloader
           </Link> — no sign-up, no plan needed.
         </p></Reveal>
       </div>

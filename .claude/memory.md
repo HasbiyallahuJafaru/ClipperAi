@@ -509,6 +509,16 @@ were verified.
   yt-dlp, whose player API bot-checks Railway — so the page shows the video's name even when the download is
   blocked, and project creation no longer spends a yt-dlp session on the production IP. Non-YouTube links 404 and
   keep the URL. `jobs.py` no longer imports yt_dlp.
+  **Downloader takes many sites (2026-09-18, user):** `api.SITES` + `api.supported()` replace the YouTube-only
+  regex — an allowlist of hosts, deliberately not "any public URL", because the route is public and
+  unauthenticated and that would make it an open media proxy. `test_jobs.py` asserts the good/bad cases
+  (`youtube.com.evil.example`, `file://`, lookalike hosts); mutation-tested by weakening the match to `s in host`.
+  Site copy now says many sites **and** upload: downloader page, its FAQ, the landing hero and the nav wording;
+  the input's YouTube glyph became a neutral VideoCamera. URL stays `/tools/youtube-downloader` (the keyword).
+  **Per-site reality (measured 2026-09-18 from the Railway container):** archive.org OK, Vimeo needs a login
+  *from any IP* (same error on this PC, so a site policy, not our IP), YouTube bot-checked in the cloud but fine
+  from a home IP. Railway's egress IP had changed to 208.77.244.172 and was blocked on the first request, so the
+  block is datacenter-wide classification — **not** traffic we generated, correcting the 2026-09-17 note below.
   **YouTube blocks Railway (measured 2026-09-17, api 152.55.184.97 / worker 152.55.184.125, same /24):** all eight
   player clients (default, tv, web_safari, mweb, android_vr, ios, tv_embedded, web_embedded) get "Sign in to
   confirm you're not a bot", so it is IP-level and no extractor setting fixes it. `clipper.py`, yt-dlp 2026.08.19

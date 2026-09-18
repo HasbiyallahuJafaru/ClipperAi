@@ -1,6 +1,6 @@
 "use client";
-// The free YouTube downloader: paste a link, watch it fetch, download. No sign-in, no plan, nothing tracked as usage.
-import { DownloadSimple, YoutubeLogo } from "@phosphor-icons/react";
+// The free video downloader: paste a link, watch it fetch, download. No sign-in, no plan, nothing tracked as usage.
+import { DownloadSimple, VideoCamera } from "@phosphor-icons/react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { api, clock } from "../../lib";
@@ -65,9 +65,9 @@ export function Downloader() {
   return (
     <div className="mx-auto max-w-2xl">
       <form className="card flex items-center gap-2 rounded-2xl p-2 pl-5 shadow-card" onSubmit={(e) => { e.preventDefault(); if (url.trim() && !busy) lookUp(); }}>
-        <YoutubeLogo weight="fill" className="size-6 shrink-0 text-accent" />
+        <VideoCamera weight="fill" className="size-6 shrink-0 text-accent" />
         <input value={url} onChange={(e) => setUrl(e.target.value)} type="url" required
-               placeholder="Paste a YouTube link" aria-label="YouTube link"
+               placeholder="Paste a video link" aria-label="Video link"
                className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted" />
         <button type="submit" disabled={busy || fetching || !url.trim()} className="btn btn-primary h-11 shrink-0 px-5 disabled:opacity-50">
           {busy ? "Starting…" : fetching ? "Fetching…" : "Download my video"}
@@ -78,7 +78,7 @@ export function Downloader() {
         <div className="card mt-4 rounded-2xl p-5 shadow-card" role="progressbar" aria-valuenow={result!.progress}
              aria-valuemin={0} aria-valuemax={100}>
           <div className="flex items-center justify-between text-[13px] font-medium text-muted">
-            <span>{result!.title ? `Fetching “${result!.title}”…` : "Fetching the video from YouTube…"}</span>
+            <span>{result!.title ? `Fetching “${result!.title}”…` : "Fetching the video…"}</span>
             <span>{result!.progress}%</span>
           </div>
           <div className="mt-2 h-2 overflow-hidden rounded-full bg-ground">
@@ -91,7 +91,7 @@ export function Downloader() {
           <div className="flex flex-col items-center gap-4 sm:flex-row">
             {result.thumbnail
               ? <img src={result.thumbnail} alt="" className="h-16 w-28 shrink-0 rounded-lg object-cover" />
-              : <YoutubeLogo weight="fill" className="size-12 shrink-0 text-accent" />}
+              : <VideoCamera weight="fill" className="size-12 shrink-0 text-accent" />}
             <div className="min-w-0">
               <p className="font-medium sm:truncate">{result.title}</p>
               {result.duration != null && <p className="text-[13px] text-muted">{clock(result.duration)}</p>}

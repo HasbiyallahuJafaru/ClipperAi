@@ -838,6 +838,15 @@ assert owner_for(True, {"sub": "user_a", "org_id": "org_b"}) == "org_b"  # the a
 assert owner_for(True, {"sub": "user_a", "azp": "https://evil.example"}) == 401
 assert owner_for(False, {}) == 401
 
+# the free downloader takes links from the sites on its allowlist, and nothing else: it is public and
+# unauthenticated, so anything wider makes it an open proxy for our bandwidth and our IP
+for good in ["https://www.youtube.com/watch?v=x", "https://youtu.be/x", "https://www.tiktok.com/@a/video/1",
+             "https://vimeo.com/76979871", "http://x.com/a/status/1", "https://m.facebook.com/watch?v=1"]:
+    assert api.supported(good), good
+for bad in ["https://evil.example/video.mp4", "http://169.254.169.254/latest/meta-data", "file:///etc/passwd",
+            "https://youtube.com.evil.example/x", "https://notyoutube.com/x", "javascript:alert(1)", "youtu.be/x"]:
+    assert not api.supported(bad), bad
+
 # rate limiting: a key gets its cap per window, other keys are unaffected
 assert not any(api.limited("spam", 2) for _ in range(2)), "blocked before the cap"
 assert api.limited("spam", 2), "didn't block at the cap"

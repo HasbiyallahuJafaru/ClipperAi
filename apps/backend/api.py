@@ -16,6 +16,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Annotated
+from urllib.parse import urlparse
 from uuid import UUID
 
 from clerk_backend_api.security import authenticate_request
@@ -295,12 +296,24 @@ def cancel_plan(owner: Owner):
     raise HTTPException(409, "there's no plan to cancel")
 
 
-# The free public YouTube downloader: no sign-in, no plan, no usage — a traffic tool for visitors.
+# The free public video downloader: no sign-in, no plan, no usage — a traffic tool for visitors.
 class DownloadRequest(BaseModel):
     url: str
 
 
-YOUTUBE = re.compile(r"^https://(www\.|m\.)?(youtube\.com/watch\?|youtube\.com/shorts/|youtu\.be/)\S+$")
+# yt-dlp reads a thousand sites; we accept these. An allowlist, not "any URL a visitor names": that would make a
+# public endpoint an open proxy for our bandwidth, our IP and whatever someone wants laundered through it.
+SITES = ("youtube.com", "youtu.be", "tiktok.com", "instagram.com", "facebook.com", "fb.watch", "x.com",
+         "twitter.com", "reddit.com", "vimeo.com", "dailymotion.com", "dai.ly", "twitch.tv", "pinterest.com",
+         "tumblr.com", "soundcloud.com", "archive.org")
+NAMED = "YouTube, TikTok, Instagram, X, Facebook, Reddit, Vimeo, Dailymotion, Twitch, Pinterest or SoundCloud"
+
+
+def supported(url: str) -> bool:
+    """True for an http(s) link on one of SITES (or a subdomain of one)."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme in ("http", "https") and any(host == s or host.endswith("." + s) for s in SITES)
 
 
 def visitor(request: Request) -> str:
@@ -313,8 +326,8 @@ def tool_resolve(request: Request, body: DownloadRequest):
         raise HTTPException(429, "Too many lookups. Try again in a minute.")
     if limited(f"dlookup-day:{visitor(request)}", 50, 86400):
         raise HTTPException(429, "That's a lot of videos for one day. Come back tomorrow.")
-    if not YOUTUBE.match(body.url.strip()):
-        raise HTTPException(422, "Paste a YouTube video link (youtube.com or youtu.be).")
+    if not supported(body.url.strip()):
+        raise HTTPException(422, f"Paste a video link from {NAMED}.")
     try:
         return downloader.start(body.url.strip())
     except downloader.Busy:
