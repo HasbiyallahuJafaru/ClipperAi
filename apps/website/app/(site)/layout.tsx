@@ -74,6 +74,11 @@ export default function SiteLayout({ children }: { children: React.ReactNode }) 
             <Link href="/terms" className="hover:text-ink">Terms</Link>
           </p>
         </div>
+        <div className="mx-auto max-w-6xl px-4 pb-6 text-[11px] sm:px-6">
+          <a href="https://hasbiyallahu.xyz" className="opacity-60 transition-opacity hover:underline hover:opacity-100">
+            Site by Hasbiyallahu
+          </a>
+        </div>
       </footer>
     </>
   );
